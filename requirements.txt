@@ -1,0 +1,2 @@
+pyserial==3.5
+pexpect==4.9.0
