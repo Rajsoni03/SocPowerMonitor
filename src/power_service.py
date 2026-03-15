@@ -41,6 +41,7 @@ class PowerService:
         self.stream_queue: queue.Queue = queue.Queue(maxsize=100)
         self.current_samples_per_command: Optional[int] = None
         self.current_delay_ms: Optional[int] = None
+        self.current_command_interval: Optional[int] = None
         self.last_stream_payload: Optional[Dict] = None
         self.last_error: Optional[str] = None
 
@@ -66,10 +67,9 @@ class PowerService:
         config = cfg or self.active_config or {}
         rail_map = {}
         for rail in config.get('rails', []):
-            names = [rail.get('name'), *(rail.get('aliases') or [])]
-            for name in names:
-                if name:
-                    rail_map[str(name).strip().lower()] = rail
+            name = rail.get('name')
+            if name:
+                rail_map[str(name).strip().lower()] = rail
         return rail_map
 
     @staticmethod
@@ -102,6 +102,7 @@ class PowerService:
             and self._is_number(eff_ratio)
             and out_v
         ):
+            # for custom mode, we calculate the actual current and power based on input voltage/current, output voltage, and efficiency ratio
             actual_current_ma = ((input_current_ma * input_voltage_v) / out_v) * eff_ratio
             actual_power_mw = actual_current_ma * out_v
             display_voltage_v = out_v
@@ -137,7 +138,13 @@ class PowerService:
         return self.annotate_readings([row.to_dict() for row in rows], cfg)
 
     # ---------- session control ----------
-    def start_session(self, metadata: Optional[Dict] = None, sample_count: Optional[int] = None, delay_ms: Optional[int] = None) -> Dict:
+    def start_session(
+        self,
+        metadata: Optional[Dict] = None,
+        sample_count: Optional[int] = None,
+        delay_ms: Optional[int] = None,
+        command_interval: Optional[int] = None,
+    ) -> Dict:
         if self.capture_thread and self.capture_thread.is_alive():
             raise RuntimeError('Capture already running')
         if not self.selected_port:
@@ -148,8 +155,10 @@ class PowerService:
         cfg = self.active_config
         samples = sample_count or cfg.get('default_sample_count', 20)
         delay = delay_ms or cfg.get('default_delay_ms', 20)
+        command_interval = command_interval if command_interval is not None else cfg.get('default_command_interval', 0)
         self.current_samples_per_command = samples
         self.current_delay_ms = delay
+        self.current_command_interval = max(0, int(command_interval))
         self.last_error = None
 
         with self.app.app_context():
@@ -163,9 +172,18 @@ class PowerService:
             self.active_session_id = session.id
 
         self.stop_event.clear()
-        self.capture_thread = threading.Thread(target=self._capture_loop, args=(samples, delay), daemon=True)
+        self.capture_thread = threading.Thread(
+            target=self._capture_loop,
+            args=(samples, delay, self.current_command_interval),
+            daemon=True,
+        )
         self.capture_thread.start()
-        return {'session_id': self.active_session_id, 'samples_per_command': samples, 'delay_ms': delay}
+        return {
+            'session_id': self.active_session_id,
+            'samples_per_command': samples,
+            'delay_ms': delay,
+            'command_interval': self.current_command_interval,
+        }
 
     def stop_session(self):
         if not self.capture_thread:
@@ -179,19 +197,19 @@ class PowerService:
                 db.session.commit()
         self.capture_thread = None
         self.active_session_id = None
+        self.current_command_interval = None
 
     # ---------- capture loop ----------
-    def _capture_loop(self, samples: int, delay_ms: int):
+    def _capture_loop(self, samples: int, delay_ms: int, command_interval: int):
         uart = Uart(self.selected_port, log_level=LOG_NONE)
         try:
             uart.connect()
             uart.consume_pending(PROMPT, timeout=1)
             dut_name = (
-                self.active_config.get('dut_name')
-                or self.active_config.get('dut')
+                self.active_config.get('name')
+                or self.active_config.get('dut_name')
                 or self.active_config.get('soc_name')
                 or self.active_config.get('config_id')
-                or self.active_config.get('name')
             )
             uart.run_command(f"auto set dut {dut_name}", PROMPT, timeout=5)
             while not self.stop_event.is_set():
@@ -204,8 +222,12 @@ class PowerService:
                 elif raw.strip():
                     self._push_stream([], error=f'No measurements parsed from device output: {raw.strip()[:240]}')
                     break
-                # throttle slightly; measurement command already delays by design
-                time.sleep(0.01)
+                if command_interval > 0 and not self.stop_event.is_set():
+                    remaining = command_interval / 1000
+                    while remaining > 0 and not self.stop_event.is_set():
+                        sleep_for = min(0.1, remaining)
+                        time.sleep(sleep_for)
+                        remaining -= sleep_for
         except Exception as exc:
             # push error into stream for UI consumption
             self._push_stream([], error=str(exc))
@@ -219,6 +241,7 @@ class PowerService:
                         db.session.commit()
             self.capture_thread = None
             self.active_session_id = None
+            self.current_command_interval = None
 
     def _persist_samples(self, readings: List[Dict]):
         ts = dt.datetime.utcnow()
@@ -287,6 +310,7 @@ class PowerService:
             'is_monitoring': bool(self.capture_thread and self.capture_thread.is_alive()),
             'samples_per_command': self.current_samples_per_command,
             'delay_ms': self.current_delay_ms,
+            'command_interval': self.current_command_interval,
             'last_error': self.last_error,
             'last_update_ts': updated_at,
             'rail_count': len(readings),

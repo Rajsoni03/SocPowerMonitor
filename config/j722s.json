@@ -2,10 +2,9 @@
   "name": "j722s-evm",
   "dut_name": "j722s-evm",
   "soc_name": "j722s",
-  "sample_rate_hz": 20,
-  "max_samples_per_command": 100,
   "default_delay_ms": 20,
   "default_sample_count": 20,
+  "default_command_interval": 3,
   "rails": [
     {
       "name": "vdd_core",
@@ -23,8 +22,7 @@
       "out_v": 0.85,
       "eff_ratio": 1,
       "calculation_mode": "direct",
-      "ignore_for_soc_total": false,
-      "aliases": ["vdd_cpu"]
+      "ignore_for_soc_total": false
     },
     {
       "name": "vda_phy_1v8",
@@ -33,8 +31,7 @@
       "out_v": 1.8,
       "eff_ratio": 1,
       "calculation_mode": "direct",
-      "ignore_for_soc_total": false,
-      "aliases": ["vdd_gpu"]
+      "ignore_for_soc_total": false
     },
     {
       "name": "vdd_ioret_core",
@@ -43,8 +40,7 @@
       "out_v": 0.8,
       "eff_ratio": 1,
       "calculation_mode": "direct",
-      "ignore_for_soc_total": false,
-      "aliases": ["vdd_serdes"]
+      "ignore_for_soc_total": false
     },
     {
       "name": "vdd_sd_dv",
@@ -53,8 +49,7 @@
       "out_v": 3.3,
       "eff_ratio": 1,
       "calculation_mode": "direct",
-      "ignore_for_soc_total": false,
-      "aliases": ["vdd_mcu"]
+      "ignore_for_soc_total": false
     },
     {
       "name": "vdd_io_1v8",
@@ -81,8 +76,7 @@
       "out_v": 1.1,
       "eff_ratio": 1,
       "calculation_mode": "direct",
-      "ignore_for_soc_total": false,
-      "aliases": ["vdd_ddr"]
+      "ignore_for_soc_total": false
     },
     {
       "name": "vdd_io_3v3",
@@ -100,8 +94,7 @@
       "out_v": 1.8,
       "eff_ratio": 1,
       "calculation_mode": "direct",
-      "ignore_for_soc_total": false,
-      "aliases": ["vdd_usb"]
+      "ignore_for_soc_total": false
     },
     {
       "name": "vdd1_ddr_1v8",

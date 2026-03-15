@@ -79,8 +79,9 @@ def create_app(test_config: Optional[dict] = None):
             meta = body.get('metadata') or {}
             samples = body.get('samples_per_command')
             delay_ms = body.get('delay_ms')
+            command_interval = body.get('command_interval', 0)
             try:
-                result = power_service.start_session(meta, samples, delay_ms)
+                result = power_service.start_session(meta, samples, delay_ms, command_interval)
             except RuntimeError as exc:
                 return {'error': str(exc)}, 400
             return result

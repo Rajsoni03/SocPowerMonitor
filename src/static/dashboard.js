@@ -13,6 +13,7 @@
       config: false,
       sampleCount: false,
       delayMs: false,
+      commandInterval: false,
     },
   };
 
@@ -28,6 +29,7 @@
     configSelect: document.getElementById('config-select'),
     sampleCount: document.getElementById('sample-count'),
     delayMs: document.getElementById('delay-ms'),
+    commandInterval: document.getElementById('command-interval'),
     startMonitoring: document.getElementById('start-monitoring'),
     stopMonitoring: document.getElementById('stop-monitoring'),
     messageStrip: document.getElementById('message-strip'),
@@ -143,8 +145,7 @@
     const ignoredRails = new Set(
       (config?.rails || [])
         .filter((rail) => rail.ignore_for_soc_total)
-        .flatMap((rail) => [rail.name, ...(rail.aliases || [])])
-        .map((railName) => normalizeRailKey(railName))
+        .map((rail) => normalizeRailKey(rail.name))
     );
     console.log([...ignoredRails]);
     return ignoredRails;
@@ -158,9 +159,7 @@
     ));
     const entries = [];
     (config?.rails || []).forEach((rail) => {
-      [rail.name, ...(rail.aliases || [])].forEach((name) => {
-        entries.push([normalizeRailKey(name), rail]);
-      });
+      entries.push([normalizeRailKey(rail.name), rail]);
     });
     return new Map(entries);
   }
@@ -335,6 +334,7 @@
     state.status = await fetchJson('/api/status');
     syncControlValue(elements.sampleCount, state.status.samples_per_command, 'sampleCount');
     syncControlValue(elements.delayMs, state.status.delay_ms, 'delayMs');
+    syncControlValue(elements.commandInterval, state.status.command_interval, 'commandInterval');
     if (state.status.latest_readings?.length && state.status.last_update_ts) {
       mergePoint(computePoint(state.status.last_update_ts, state.status.latest_readings));
     }
@@ -787,6 +787,7 @@
     const configName = elements.configSelect.value;
     const samples = Number(elements.sampleCount.value);
     const delay = Number(elements.delayMs.value);
+    const commandInterval = Number(elements.commandInterval.value);
 
     if (!port) {
       setMessage('Select a UART port before starting.', true);
@@ -816,6 +817,7 @@
         action: 'start',
         samples_per_command: samples,
         delay_ms: delay,
+        command_interval: commandInterval,
       }),
     });
 
@@ -823,6 +825,7 @@
     markDirty('config', false);
     markDirty('sampleCount', false);
     markDirty('delayMs', false);
+    markDirty('commandInterval', false);
     state.history = [];
     state.viewedSessionId = session.session_id;
     state.viewedConfigName = state.status?.active_config || null;
@@ -831,6 +834,7 @@
     syncControlValue(elements.configSelect, state.status?.active_config_id, 'config', { force: true });
     syncControlValue(elements.sampleCount, state.status?.samples_per_command, 'sampleCount', { force: true });
     syncControlValue(elements.delayMs, state.status?.delay_ms, 'delayMs', { force: true });
+    syncControlValue(elements.commandInterval, state.status?.command_interval, 'commandInterval', { force: true });
     await loadHistoryForSession(session.session_id);
     await loadSessions();
     render();
@@ -893,6 +897,10 @@
 
   elements.delayMs.addEventListener('input', () => {
     markDirty('delayMs');
+  });
+
+  elements.commandInterval.addEventListener('input', () => {
+    markDirty('commandInterval');
   });
 
   elements.startMonitoring.addEventListener('click', () => {
