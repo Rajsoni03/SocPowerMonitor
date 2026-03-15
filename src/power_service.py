@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import math
 import queue
 import threading
 import time
@@ -60,6 +61,80 @@ class PowerService:
             row.enabled = bool(rail.get('enabled', True))
             db.session.add(row)
         db.session.commit()
+
+    def _rail_map(self, cfg: Optional[Dict] = None) -> Dict[str, Dict]:
+        config = cfg or self.active_config or {}
+        rail_map = {}
+        for rail in config.get('rails', []):
+            names = [rail.get('name'), *(rail.get('aliases') or [])]
+            for name in names:
+                if name:
+                    rail_map[str(name).strip().lower()] = rail
+        return rail_map
+
+    @staticmethod
+    def _is_number(value) -> bool:
+        return isinstance(value, (int, float)) and math.isfinite(value)
+
+    def _annotate_reading(self, reading: Dict, cfg: Optional[Dict] = None) -> Dict:
+        annotated = dict(reading)
+        rail_name = str(reading.get('rail') or '').strip()
+        rail_cfg = self._rail_map(cfg).get(rail_name.lower())
+        if not rail_cfg:
+            return annotated
+
+        input_voltage_v = reading.get('voltage_v')
+        input_current_ma = reading.get('current_ma')
+        raw_power_mw = reading.get('power_mw')
+        out_v = rail_cfg.get('out_v')
+        eff_ratio = rail_cfg.get('eff_ratio', 1)
+        calculation_mode = rail_cfg.get('calculation_mode', 'direct')
+
+        actual_current_ma = input_current_ma
+        actual_power_mw = raw_power_mw
+        display_voltage_v = input_voltage_v
+
+        if (
+            calculation_mode == 'custom'
+            and self._is_number(input_voltage_v)
+            and self._is_number(input_current_ma)
+            and self._is_number(out_v)
+            and self._is_number(eff_ratio)
+            and out_v
+        ):
+            actual_current_ma = ((input_current_ma * input_voltage_v) / out_v) * eff_ratio
+            actual_power_mw = actual_current_ma * out_v
+            display_voltage_v = out_v
+        elif self._is_number(input_voltage_v) and self._is_number(input_current_ma) and not self._is_number(actual_power_mw):
+            actual_power_mw = input_current_ma * input_voltage_v
+
+        annotated.update({
+            'rail': rail_cfg['name'],
+            'group': rail_cfg.get('group'),
+            'out_v': out_v,
+            'eff_ratio': eff_ratio,
+            'calculation_mode': calculation_mode,
+            'ignore_for_soc_total': bool(rail_cfg.get('ignore_for_soc_total', False)),
+            'display_voltage_v': display_voltage_v,
+            'actual_current_ma': actual_current_ma,
+            'actual_power_mw': actual_power_mw,
+        })
+        return annotated
+
+    def annotate_readings(self, readings: List[Dict], cfg: Optional[Dict] = None) -> List[Dict]:
+        return [self._annotate_reading(reading, cfg) for reading in readings]
+
+    def serialize_sample_rows(self, rows: List[Sample]) -> List[Dict]:
+        if not rows:
+            return []
+        session_name = rows[0].session.config_name if rows[0].session else None
+        cfg = None
+        if session_name:
+            try:
+                cfg = self.config_loader.load_config(session_name)
+            except FileNotFoundError:
+                cfg = self.active_config
+        return self.annotate_readings([row.to_dict() for row in rows], cfg)
 
     # ---------- session control ----------
     def start_session(self, metadata: Optional[Dict] = None, sample_count: Optional[int] = None, delay_ms: Optional[int] = None) -> Dict:
@@ -122,7 +197,7 @@ class PowerService:
             while not self.stop_event.is_set():
                 timeout = max(5, int(samples * delay_ms / 1000) + 5)
                 raw = uart.run_command(f"auto measure power {samples} {delay_ms}", PROMPT, timeout=timeout)
-                readings = parse_measurement(raw)
+                readings = self.annotate_readings(parse_measurement(raw))
                 if readings:
                     self._persist_samples(readings)
                     self._push_stream(readings)
@@ -199,9 +274,9 @@ class PowerService:
             readings = self.last_stream_payload.get('readings', [])
             updated_at = self.last_stream_payload.get('ts')
             total_power_mw = sum(
-                (item.get('power_mw') or 0.0)
+                (item.get('actual_power_mw') or item.get('power_mw') or 0.0)
                 for item in readings
-                if item.get('rail') not in ignored_rails
+                if not item.get('ignore_for_soc_total') and item.get('rail') not in ignored_rails
             )
 
         return {

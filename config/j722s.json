@@ -10,84 +10,106 @@
     {
       "name": "vdd_core",
       "enabled": true,
+      "group": "SOC",
+      "out_v": 0.8,
+      "eff_ratio": 1,
+      "calculation_mode": "direct",
       "ignore_for_soc_total": false
     },
     {
-      "name": "vdd_cpu",
+      "name": "vdd_ram_0v85",
       "enabled": true,
+      "group": "SOC_RAM",
+      "out_v": 0.85,
+      "eff_ratio": 1,
+      "calculation_mode": "direct",
       "ignore_for_soc_total": false,
-      "aliases": [
-        "vdd_ram_0v85"
-      ]
+      "aliases": ["vdd_cpu"]
     },
     {
-      "name": "vdd_gpu",
+      "name": "vda_phy_1v8",
       "enabled": true,
+      "group": "SOC",
+      "out_v": 1.8,
+      "eff_ratio": 1,
+      "calculation_mode": "direct",
       "ignore_for_soc_total": false,
-      "aliases": [
-        "vda_phy_1v8"
-      ]
+      "aliases": ["vdd_gpu"]
     },
     {
-      "name": "vdd_ddr",
+      "name": "vdd_ioret_core",
       "enabled": true,
+      "group": "SOC",
+      "out_v": 0.8,
+      "eff_ratio": 1,
+      "calculation_mode": "direct",
       "ignore_for_soc_total": false,
-      "aliases": [
-        "vdd_ddr_1v1"
-      ]
+      "aliases": ["vdd_serdes"]
     },
     {
-      "name": "vdd_mcu",
+      "name": "vdd_sd_dv",
       "enabled": true,
+      "group": "SOC",
+      "out_v": 3.3,
+      "eff_ratio": 1,
+      "calculation_mode": "direct",
       "ignore_for_soc_total": false,
-      "aliases": [
-        "vdd_sd_dv"
-      ]
+      "aliases": ["vdd_mcu"]
     },
     {
       "name": "vdd_io_1v8",
       "enabled": true,
+      "group": "SOC",
+      "out_v": 1.8,
+      "eff_ratio": 1,
+      "calculation_mode": "direct",
       "ignore_for_soc_total": false
-    },
-    {
-      "name": "vdd_usb",
-      "enabled": true,
-      "ignore_for_soc_total": false,
-      "aliases": [
-        "vda_pll_1v8"
-      ]
-    },
-    {
-      "name": "vdd_pcie",
-      "enabled": true,
-      "ignore_for_soc_total": false
-    },
-    {
-      "name": "vdd_serdes",
-      "enabled": true,
-      "ignore_for_soc_total": false,
-      "aliases": [
-        "vdd_ioret_core"
-      ]
     },
     {
       "name": "vsys_3v3",
       "enabled": true,
+      "group": "VIN",
+      "out_v": 3.3,
+      "eff_ratio": 1,
+      "calculation_mode": "raw",
       "ignore_for_soc_total": true
     },
     {
       "name": "vdd_ddr_1v1",
       "enabled": true,
-      "ignore_for_soc_total": false
+      "group": "SOC_DDR",
+      "out_v": 1.1,
+      "eff_ratio": 1,
+      "calculation_mode": "direct",
+      "ignore_for_soc_total": false,
+      "aliases": ["vdd_ddr"]
     },
     {
       "name": "vdd_io_3v3",
       "enabled": true,
+      "group": "SOC",
+      "out_v": 3.3,
+      "eff_ratio": 1,
+      "calculation_mode": "direct",
       "ignore_for_soc_total": false
+    },
+    {
+      "name": "vda_pll_1v8",
+      "enabled": true,
+      "group": "SOC",
+      "out_v": 1.8,
+      "eff_ratio": 1,
+      "calculation_mode": "direct",
+      "ignore_for_soc_total": false,
+      "aliases": ["vdd_usb"]
     },
     {
       "name": "vdd1_ddr_1v8",
       "enabled": true,
+      "group": "LPDDR4_SDRAM",
+      "out_v": 1.8,
+      "eff_ratio": 1,
+      "calculation_mode": "raw",
       "ignore_for_soc_total": true
     }
   ]

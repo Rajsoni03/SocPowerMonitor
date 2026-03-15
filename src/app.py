@@ -110,7 +110,7 @@ def create_app(test_config: Optional[dict] = None):
             except ValueError:
                 return {'error': 'since_ts must be ISO-8601'}, 400
         rows = query.offset(offset).limit(limit).all()
-        return jsonify([r.to_dict() for r in rows])
+        return jsonify(power_service.serialize_sample_rows(rows))
 
     @app.get('/api/export.csv')
     def api_export_csv():

@@ -169,16 +169,23 @@
     const rails = {};
     let totalPower = 0;
     const ignoredRails = currentIgnoredRails();
+    const configRails = currentConfigRailMap();
 
     readings.forEach((reading) => {
-      const name = reading.rail || 'unknown';
+      const matchedRail = configRails.get(normalizeRailKey(reading.rail));
+      const name = matchedRail?.name || reading.rail || 'unknown';
+      const voltage = Number.isFinite(reading.display_voltage_v) ? reading.display_voltage_v : reading.voltage_v;
+      const current = Number.isFinite(reading.actual_current_ma) ? reading.actual_current_ma : reading.current_ma;
+      const power = Number.isFinite(reading.actual_power_mw) ? reading.actual_power_mw : reading.power_mw;
       rails[name] = {
-        voltage_v: reading.voltage_v,
-        current_ma: reading.current_ma,
-        power_mw: reading.power_mw,
+        voltage_v: voltage,
+        current_ma: current,
+        power_mw: power,
+        group: reading.group || matchedRail?.group || null,
+        calculation_mode: reading.calculation_mode || matchedRail?.calculation_mode || null,
       };
-      if (!ignoredRails.has(name)) {
-        totalPower += reading.power_mw || 0;
+      if (!ignoredRails.has(normalizeRailKey(name))) {
+        totalPower += power || 0;
       }
     });
 
