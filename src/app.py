@@ -7,7 +7,7 @@ from typing import Optional
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
 from .config_loader import ConfigLoader
-from .models import Rail, Sample, Session, db, init_db
+from .models import Sample, Session, init_db
 from .power_service import PowerService, list_uart_ports
 
 

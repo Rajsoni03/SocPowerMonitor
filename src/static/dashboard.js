@@ -145,9 +145,9 @@
     const ignoredRails = new Set(
       (config?.rails || [])
         .filter((rail) => rail.ignore_for_soc_total)
-        .map((rail) => normalizeRailKey(rail.name))
+        .flatMap((rail) => [rail.name, ...(rail.aliases || [])])
+        .map((name) => normalizeRailKey(name))
     );
-    console.log([...ignoredRails]);
     return ignoredRails;
   }
 
@@ -159,7 +159,9 @@
     ));
     const entries = [];
     (config?.rails || []).forEach((rail) => {
-      entries.push([normalizeRailKey(rail.name), rail]);
+      [rail.name, ...(rail.aliases || [])].forEach((name) => {
+        entries.push([normalizeRailKey(name), rail]);
+      });
     });
     return new Map(entries);
   }
@@ -182,6 +184,11 @@
         power_mw: power,
         group: reading.group || matchedRail?.group || null,
         calculation_mode: reading.calculation_mode || matchedRail?.calculation_mode || null,
+        ignore_for_soc_total: Boolean(
+          reading.ignore_for_soc_total
+          || matchedRail?.ignore_for_soc_total
+          || ignoredRails.has(normalizeRailKey(name))
+        ),
       };
       if (!ignoredRails.has(normalizeRailKey(name))) {
         totalPower += power || 0;
@@ -676,6 +683,7 @@
       const latestPower = Number.isFinite(latest?.power_mw) ? latest.power_mw : NaN;
       const latestVoltageMv = Number.isFinite(latest?.voltage_v) ? latest.voltage_v * 1000 : NaN;
       const latestCurrentMa = Number.isFinite(latest?.current_ma) ? latest.current_ma : NaN;
+      const excludedFromTotal = Boolean(latest?.ignore_for_soc_total);
       const delta = Number.isFinite(previousPower) ? latestPower - previousPower : NaN;
       const color = railColor(railName, index);
       const values = state.history.map((point) => {
@@ -686,7 +694,10 @@
       const card = document.createElement('article');
       card.className = 'rail-chart-card';
       card.innerHTML = `
-        <h3>${railName}</h3>
+        <div class="rail-chart-heading">
+          <h3>${railName}</h3>
+          ${excludedFromTotal ? '<span class="rail-scope-badge-excluded">Excluded</span>' : '<span class="rail-scope-badge-included">Included</span>'}
+        </div>
         <strong>${formatNumber(latestPower)} mW</strong>
         <div class="rail-chart-meta">
           <span>${formatNumber(latestVoltageMv, 0)} mV</span>

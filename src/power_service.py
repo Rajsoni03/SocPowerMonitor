@@ -8,7 +8,14 @@ from typing import Dict, List, Optional
 
 from serial.tools import list_ports
 
-from .models import db, Rail, Session, Sample
+from .models import (
+    CONFIG_SNAPSHOT_KEY,
+    SYSTEM_METADATA_KEY,
+    db,
+    Rail,
+    Session,
+    Sample,
+)
 from .parser import parse_measurement
 from .uart import LOG_NONE, Uart
 
@@ -41,7 +48,7 @@ class PowerService:
         self.stream_queue: queue.Queue = queue.Queue(maxsize=100)
         self.current_samples_per_command: Optional[int] = None
         self.current_delay_ms: Optional[int] = None
-        self.current_command_interval: Optional[int] = None
+        self.current_command_interval: Optional[float] = None
         self.last_stream_payload: Optional[Dict] = None
         self.last_error: Optional[str] = None
 
@@ -67,10 +74,56 @@ class PowerService:
         config = cfg or self.active_config or {}
         rail_map = {}
         for rail in config.get('rails', []):
-            name = rail.get('name')
-            if name:
-                rail_map[str(name).strip().lower()] = rail
+            keys = [rail.get('name'), *(rail.get('aliases') or [])]
+            for key in keys:
+                if key:
+                    rail_map[str(key).strip().lower()] = rail
         return rail_map
+
+    @staticmethod
+    def _clean_config_snapshot(cfg: Dict) -> Dict:
+        snapshot = {key: value for key, value in cfg.items() if not str(key).startswith('__')}
+        return json.loads(json.dumps(snapshot))
+
+    def _build_session_metadata(self, metadata: Optional[Dict], cfg: Dict) -> Dict:
+        session_metadata = dict(metadata or {})
+        raw_system_metadata = session_metadata.get(SYSTEM_METADATA_KEY)
+        system_metadata = dict(raw_system_metadata) if isinstance(raw_system_metadata, dict) else {}
+        system_metadata[CONFIG_SNAPSHOT_KEY] = self._clean_config_snapshot(cfg)
+        session_metadata[SYSTEM_METADATA_KEY] = system_metadata
+        return session_metadata
+
+    def _config_for_session(self, session: Optional[Session]) -> Optional[Dict]:
+        if not session:
+            return None
+
+        metadata = session.session_metadata if isinstance(session.session_metadata, dict) else {}
+        system_metadata = metadata.get(SYSTEM_METADATA_KEY)
+        if isinstance(system_metadata, dict):
+            config_snapshot = system_metadata.get(CONFIG_SNAPSHOT_KEY)
+            if isinstance(config_snapshot, dict):
+                return config_snapshot
+
+        try:
+            return self.config_loader.load_config(session.config_name)
+        except FileNotFoundError:
+            return None
+
+    def _mark_session_ended(self, session_id: Optional[int]):
+        if not session_id:
+            return
+        with self.app.app_context():
+            session = Session.query.get(session_id)
+            if session and not session.ended_at:
+                session.ended_at = dt.datetime.utcnow()
+                db.session.commit()
+
+    def _clear_capture_state(self, thread: threading.Thread, session_id: Optional[int]):
+        if self.capture_thread is thread:
+            self.capture_thread = None
+        if self.active_session_id == session_id:
+            self.active_session_id = None
+            self.current_command_interval = None
 
     @staticmethod
     def _is_number(value) -> bool:
@@ -128,13 +181,7 @@ class PowerService:
     def serialize_sample_rows(self, rows: List[Sample]) -> List[Dict]:
         if not rows:
             return []
-        session_name = rows[0].session.config_name if rows[0].session else None
-        cfg = None
-        if session_name:
-            try:
-                cfg = self.config_loader.load_config(session_name)
-            except FileNotFoundError:
-                cfg = self.active_config
+        cfg = self._config_for_session(rows[0].session)
         return self.annotate_readings([row.to_dict() for row in rows], cfg)
 
     # ---------- session control ----------
@@ -153,19 +200,32 @@ class PowerService:
             raise RuntimeError('Config not activated')
 
         cfg = self.active_config
-        samples = sample_count or cfg.get('default_sample_count', 20)
-        delay = delay_ms or cfg.get('default_delay_ms', 20)
-        command_interval = command_interval if command_interval is not None else cfg.get('default_command_interval', 0)
+        port = self.selected_port
+
+        samples = int(sample_count) if sample_count is not None else int(cfg.get('default_sample_count', 20))
+        delay = int(delay_ms) if delay_ms is not None else int(cfg.get('default_delay_ms', 20))
+        command_interval = (
+            float(command_interval)
+            if command_interval is not None
+            else float(cfg.get('default_command_interval', 0))
+        )
+        if samples < 1:
+            raise RuntimeError('samples_per_command must be >= 1')
+        if delay < 1:
+            raise RuntimeError('delay_ms must be >= 1')
+        if command_interval < 0:
+            raise RuntimeError('command_interval must be >= 0')
+
         self.current_samples_per_command = samples
         self.current_delay_ms = delay
-        self.current_command_interval = max(0, int(command_interval))
+        self.current_command_interval = command_interval
         self.last_error = None
 
         with self.app.app_context():
             session = Session(
                 config_name=cfg['name'],
                 config_hash=cfg['__hash__'],
-                session_metadata=metadata or {},
+                session_metadata=self._build_session_metadata(metadata, cfg),
             )
             db.session.add(session)
             db.session.commit()
@@ -174,7 +234,7 @@ class PowerService:
         self.stop_event.clear()
         self.capture_thread = threading.Thread(
             target=self._capture_loop,
-            args=(samples, delay, self.current_command_interval),
+            args=(session.id, port, self._clean_config_snapshot(cfg), samples, delay, self.current_command_interval),
             daemon=True,
         )
         self.capture_thread.start()
@@ -186,44 +246,52 @@ class PowerService:
         }
 
     def stop_session(self):
-        if not self.capture_thread:
+        thread = self.capture_thread
+        session_id = self.active_session_id
+        if not thread:
             return
         self.stop_event.set()
-        self.capture_thread.join(timeout=5)
-        with self.app.app_context():
-            session = Session.query.get(self.active_session_id)
-            if session and not session.ended_at:
-                session.ended_at = dt.datetime.utcnow()
-                db.session.commit()
-        self.capture_thread = None
-        self.active_session_id = None
-        self.current_command_interval = None
+        thread.join(timeout=5)
+        if thread.is_alive():
+            self.last_error = 'Timed out while waiting for capture loop to stop'
+            return
+        self._mark_session_ended(session_id)
+        self._clear_capture_state(thread, session_id)
 
     # ---------- capture loop ----------
-    def _capture_loop(self, samples: int, delay_ms: int, command_interval: int):
-        uart = Uart(self.selected_port, log_level=LOG_NONE)
+    def _capture_loop(
+        self,
+        session_id: int,
+        port: str,
+        cfg: Dict,
+        samples: int,
+        delay_ms: int,
+        command_interval: float,
+    ):
+        thread = threading.current_thread()
+        uart = Uart(port, log_level=LOG_NONE)
         try:
             uart.connect()
             uart.consume_pending(PROMPT, timeout=1)
             dut_name = (
-                self.active_config.get('name')
-                or self.active_config.get('dut_name')
-                or self.active_config.get('soc_name')
-                or self.active_config.get('config_id')
+                cfg.get('dut_name')
+                or cfg.get('name')
+                or cfg.get('soc_name')
+                or cfg.get('config_id')
             )
             uart.run_command(f"auto set dut {dut_name}", PROMPT, timeout=5)
             while not self.stop_event.is_set():
                 timeout = max(5, int(samples * delay_ms / 1000) + 5)
                 raw = uart.run_command(f"auto measure power {samples} {delay_ms}", PROMPT, timeout=timeout)
-                readings = self.annotate_readings(parse_measurement(raw))
+                readings = self.annotate_readings(parse_measurement(raw), cfg)
                 if readings:
-                    self._persist_samples(readings)
+                    self._persist_samples(session_id, readings)
                     self._push_stream(readings)
                 elif raw.strip():
                     self._push_stream([], error=f'No measurements parsed from device output: {raw.strip()[:240]}')
                     break
                 if command_interval > 0 and not self.stop_event.is_set():
-                    remaining = command_interval / 1000
+                    remaining = command_interval
                     while remaining > 0 and not self.stop_event.is_set():
                         sleep_for = min(0.1, remaining)
                         time.sleep(sleep_for)
@@ -233,17 +301,10 @@ class PowerService:
             self._push_stream([], error=str(exc))
         finally:
             uart.disconnect()
-            with self.app.app_context():
-                if self.active_session_id:
-                    session = Session.query.get(self.active_session_id)
-                    if session and not session.ended_at:
-                        session.ended_at = dt.datetime.utcnow()
-                        db.session.commit()
-            self.capture_thread = None
-            self.active_session_id = None
-            self.current_command_interval = None
+            self._mark_session_ended(session_id)
+            self._clear_capture_state(thread, session_id)
 
-    def _persist_samples(self, readings: List[Dict]):
+    def _persist_samples(self, session_id: int, readings: List[Dict]):
         ts = dt.datetime.utcnow()
         with self.app.app_context():
             rail_lookup = {r.name: r for r in Rail.query.all()}
@@ -255,7 +316,7 @@ class PowerService:
                     db.session.flush()
                     rail_lookup[rail.name] = rail
                 sample = Sample(
-                    session_id=self.active_session_id,
+                    session_id=session_id,
                     rail_id=rail.id,
                     ts=ts,
                     voltage_v=r.get('voltage_v'),

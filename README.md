@@ -39,10 +39,10 @@ The project is aimed at board bring-up, lab validation, workload comparison, and
 ### Setup
 
 ```bash
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-python -m src.app
+python3 -m src.app
 ```
 
 The server runs on `http://localhost:8000/`.
@@ -52,10 +52,9 @@ The server runs on `http://localhost:8000/`.
 1. Open `http://localhost:8000/`
 2. Select the UART port
 3. Select the SoC config
-4. Click `Activate`
-5. Choose sample count and delay
-6. Click `Start monitoring`
-7. View live charts or export the session as CSV
+4. Choose sample count, delay, and command interval in seconds
+5. Click `Start monitoring`
+6. View live charts or export the session as CSV
 
 ## Configuration
 
@@ -90,6 +89,7 @@ Example structure:
 - `soc_name`: logical SoC identifier
 - `default_delay_ms`: default delay for measurement command
 - `default_sample_count`: default averaging sample count
+- `default_command_interval`: delay between measurement commands, in seconds
 - `rails`: list of rails expected for the SoC
 - `rails[].aliases`: alternate names that may appear in device output
 - `rails[].ignore_for_soc_total`: excludes a rail from combined SoC total calculations
@@ -168,6 +168,7 @@ SocPowerMonitor/
 - The frontend does not auto-resync config/status continuously; use the dashboard `Sync` button when needed
 - Historical sessions can be viewed from the dashboard without affecting live monitoring
 - Unknown rails returned by the device are persisted so session history is not lost
+- Each session stores a config snapshot so later config edits do not change historical interpretation
 
 ## Troubleshooting
 

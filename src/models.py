@@ -3,6 +3,9 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import Index
 from sqlalchemy.dialects.sqlite import JSON
 
+SYSTEM_METADATA_KEY = '__system__'
+CONFIG_SNAPSHOT_KEY = 'config_snapshot'
+
 # Global SQLAlchemy instance
 # Initialized in app factory
 
@@ -32,6 +35,22 @@ class Session(db.Model):
     config_hash = db.Column(db.String(64), nullable=False)
     session_metadata = db.Column('metadata', JSON, nullable=True)
 
+    def public_metadata(self):
+        metadata = self.session_metadata
+        if not isinstance(metadata, dict):
+            return metadata
+
+        cleaned_metadata = dict(metadata)
+        system_metadata = cleaned_metadata.get(SYSTEM_METADATA_KEY)
+        if isinstance(system_metadata, dict):
+            cleaned_system_metadata = dict(system_metadata)
+            cleaned_system_metadata.pop(CONFIG_SNAPSHOT_KEY, None)
+            if cleaned_system_metadata:
+                cleaned_metadata[SYSTEM_METADATA_KEY] = cleaned_system_metadata
+            else:
+                cleaned_metadata.pop(SYSTEM_METADATA_KEY, None)
+        return cleaned_metadata
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -39,7 +58,7 @@ class Session(db.Model):
             'ended_at': self.ended_at.isoformat() + 'Z' if self.ended_at else None,
             'config_name': self.config_name,
             'config_hash': self.config_hash,
-            'metadata': self.session_metadata,
+            'metadata': self.public_metadata(),
         }
 
 
