@@ -18,13 +18,14 @@
 
   const MAX_HISTORY_POINTS = 180;
   const RAIL_COLORS = ['#38bdf8', '#22c55e', '#f59e0b', '#a78bfa', '#f472b6', '#fb7185', '#14b8a6', '#f97316'];
+  let chartTooltip = null;
+  let chartTooltipGuardsInstalled = false;
 
   const elements = {
     portSelect: document.getElementById('port-select'),
     refreshPorts: document.getElementById('refresh-ports'),
     syncDashboard: document.getElementById('sync-dashboard'),
     configSelect: document.getElementById('config-select'),
-    activateConfig: document.getElementById('activate-config'),
     sampleCount: document.getElementById('sample-count'),
     delayMs: document.getElementById('delay-ms'),
     startMonitoring: document.getElementById('start-monitoring'),
@@ -232,6 +233,61 @@
     return `${direction} ${Math.abs(delta).toFixed(1)} ${unit}`;
   }
 
+  function getChartTooltip() {
+    if (!chartTooltip) {
+      chartTooltip = document.createElement('div');
+      chartTooltip.className = 'chart-tooltip';
+      chartTooltip.hidden = true;
+      document.body.appendChild(chartTooltip);
+    }
+    return chartTooltip;
+  }
+
+  function hideChartTooltip() {
+    if (chartTooltip) {
+      chartTooltip.hidden = true;
+    }
+  }
+
+  function installChartTooltipGuards() {
+    if (chartTooltipGuardsInstalled) {
+      return;
+    }
+    document.addEventListener('pointermove', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLCanvasElement) || target.dataset.chartCanvas !== 'true') {
+        hideChartTooltip();
+      }
+    });
+    window.addEventListener('scroll', hideChartTooltip, true);
+    window.addEventListener('blur', hideChartTooltip);
+    chartTooltipGuardsInstalled = true;
+  }
+
+  function showChartTooltip(event, point, unitLabel) {
+    const tooltip = getChartTooltip();
+    tooltip.innerHTML = `
+      <strong>${point.label || ''}</strong>
+      <span>${formatNumber(point.value)} ${unitLabel}</span>
+    `;
+    tooltip.hidden = false;
+
+    const offset = 14;
+    const rect = tooltip.getBoundingClientRect();
+    let left = event.clientX + offset;
+    let top = event.clientY - rect.height - offset;
+
+    if (left + rect.width > window.innerWidth - 8) {
+      left = event.clientX - rect.width - offset;
+    }
+    if (top < 8) {
+      top = event.clientY + offset;
+    }
+
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+  }
+
   function railColor(name, index) {
     const fallback = RAIL_COLORS[index % RAIL_COLORS.length];
     let hash = 0;
@@ -396,6 +452,7 @@
 
   function drawLineChart(canvas, values, labels, lineColor, fillColor, unitLabel, options = {}) {
     const context = canvas.getContext('2d');
+    canvas.dataset.chartCanvas = 'true';
     const width = Math.round(canvas.clientWidth);
     if (!canvas.dataset.logicalHeight) {
       canvas.dataset.logicalHeight = String(
@@ -413,6 +470,7 @@
     const xTickCount = Math.min(4, Math.max(labels.length - 1, 1));
     const yTickCount = 4;
     const showXAxisLabels = options.showXAxisLabels !== false;
+    let activePoint = null;
 
     canvas.style.height = `${height}px`;
 
@@ -421,21 +479,9 @@
       canvas.height = height;
     }
 
-    context.setTransform(1, 0, 0, 1, 0, 0);
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.font = '11px "IBM Plex Sans", sans-serif';
-
-    context.strokeStyle = 'rgba(148, 163, 184, 0.14)';
-    context.lineWidth = 1;
-    for (let i = 0; i <= yTickCount; i += 1) {
-      const y = topPad + (plotHeight / yTickCount) * i;
-      context.beginPath();
-      context.moveTo(leftPad, y);
-      context.lineTo(width - rightPad, y);
-      context.stroke();
-    }
-
     if (!numericValues.length) {
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, canvas.width, canvas.height);
       context.fillStyle = 'rgba(148, 163, 184, 0.82)';
       context.font = '14px "IBM Plex Sans", sans-serif';
       context.fillText('No samples yet', 24, height / 2);
@@ -457,66 +503,134 @@
     const points = values.map((value, index) => ({
       x: leftPad + xStep * index,
       y: Number.isFinite(value) ? height - bottomPad - ((value - minValue) / range) * plotHeight : null,
+      value,
+      label: labels[index] || '',
     }));
+    const hoverPoints = points.filter((point) => Number.isFinite(point.y));
+    const renderChart = () => {
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.font = '11px "IBM Plex Sans", sans-serif';
 
-    context.fillStyle = 'rgba(148, 163, 184, 0.9)';
-    context.textAlign = 'right';
-    for (let i = 0; i <= yTickCount; i += 1) {
-      const tickValue = minValue + (yValueStep * (yTickCount - i));
-      const y = topPad + (plotHeight / yTickCount) * i;
-      context.fillText(`${tickValue.toFixed(0)} ${unitLabel}`, leftPad - 6, y + 4);
-    }
-
-    if (showXAxisLabels) {
-      context.textAlign = 'center';
-      for (let i = 0; i <= xTickCount; i += 1) {
-        const labelIndex = Math.min(
-          labels.length - 1,
-          Math.round((labels.length - 1) * (i / xTickCount))
-        );
-        const x = leftPad + plotWidth * (i / xTickCount);
-        context.fillText(labels[labelIndex] || '', x, height - 10);
+      context.strokeStyle = 'rgba(148, 163, 184, 0.14)';
+      context.lineWidth = 1;
+      for (let i = 0; i <= yTickCount; i += 1) {
+        const y = topPad + (plotHeight / yTickCount) * i;
+        context.beginPath();
+        context.moveTo(leftPad, y);
+        context.lineTo(width - rightPad, y);
+        context.stroke();
       }
-    }
 
-    context.beginPath();
-    let started = false;
-    points.forEach((point, index) => {
-      if (!Number.isFinite(point.y)) {
-        started = false;
-        return;
+      context.fillStyle = 'rgba(148, 163, 184, 0.9)';
+      context.textAlign = 'right';
+      for (let i = 0; i <= yTickCount; i += 1) {
+        const tickValue = minValue + (yValueStep * (yTickCount - i));
+        const y = topPad + (plotHeight / yTickCount) * i;
+        context.fillText(`${tickValue.toFixed(0)} ${unitLabel}`, leftPad - 6, y + 4);
       }
-      if (!started || index === 0) {
-        context.moveTo(point.x, point.y);
-        started = true;
-      } else {
-        context.lineTo(point.x, point.y);
-      }
-    });
-    context.lineWidth = 3;
-    context.strokeStyle = lineColor;
-    context.stroke();
 
-    if (numericValues.length === values.length) {
+      if (showXAxisLabels) {
+        context.textAlign = 'center';
+        for (let i = 0; i <= xTickCount; i += 1) {
+          const labelIndex = Math.min(
+            labels.length - 1,
+            Math.round((labels.length - 1) * (i / xTickCount))
+          );
+          const x = leftPad + plotWidth * (i / xTickCount);
+          context.fillText(labels[labelIndex] || '', x, height - 10);
+        }
+      }
+
       context.beginPath();
+      let started = false;
       points.forEach((point, index) => {
-        if (index === 0) {
+        if (!Number.isFinite(point.y)) {
+          started = false;
+          return;
+        }
+        if (!started || index === 0) {
           context.moveTo(point.x, point.y);
+          started = true;
         } else {
           context.lineTo(point.x, point.y);
         }
       });
-      context.lineTo(width - rightPad, height - bottomPad);
-      context.lineTo(leftPad, height - bottomPad);
-      context.closePath();
-      context.fillStyle = fillColor;
-      context.fill();
-    }
+      context.lineWidth = 3;
+      context.strokeStyle = lineColor;
+      context.stroke();
 
-    context.fillStyle = 'rgba(203, 213, 225, 0.9)';
-    context.textAlign = 'right';
-    context.fillText(`${rawMaxValue.toFixed(1)} ${unitLabel}`, width - rightPad, 18);
-    context.textAlign = 'left';
+      if (numericValues.length === values.length) {
+        context.beginPath();
+        points.forEach((point, index) => {
+          if (index === 0) {
+            context.moveTo(point.x, point.y);
+          } else {
+            context.lineTo(point.x, point.y);
+          }
+        });
+        context.lineTo(width - rightPad, height - bottomPad);
+        context.lineTo(leftPad, height - bottomPad);
+        context.closePath();
+        context.fillStyle = fillColor;
+        context.fill();
+      }
+
+      if (activePoint) {
+        context.strokeStyle = 'rgba(226, 232, 240, 0.28)';
+        context.lineWidth = 1;
+        context.beginPath();
+        context.moveTo(activePoint.x, topPad);
+        context.lineTo(activePoint.x, height - bottomPad);
+        context.stroke();
+
+        context.fillStyle = lineColor;
+        context.beginPath();
+        context.arc(activePoint.x, activePoint.y, 4.5, 0, Math.PI * 2);
+        context.fill();
+
+        context.strokeStyle = 'rgba(241, 245, 249, 0.95)';
+        context.lineWidth = 2;
+        context.beginPath();
+        context.arc(activePoint.x, activePoint.y, 7, 0, Math.PI * 2);
+        context.stroke();
+      }
+
+      context.fillStyle = 'rgba(203, 213, 225, 0.9)';
+      context.textAlign = 'right';
+      context.fillText(`${rawMaxValue.toFixed(1)} ${unitLabel}`, width - rightPad, 18);
+      context.textAlign = 'left';
+    };
+
+    renderChart();
+
+    canvas.onmousemove = (event) => {
+      if (!hoverPoints.length) {
+        hideChartTooltip();
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = event.clientX - rect.left;
+      let nearest = hoverPoints[0];
+      let nearestDistance = Math.abs(mouseX - nearest.x);
+
+      hoverPoints.forEach((point) => {
+        const distance = Math.abs(mouseX - point.x);
+        if (distance < nearestDistance) {
+          nearest = point;
+          nearestDistance = distance;
+        }
+      });
+
+      activePoint = nearest;
+      renderChart();
+      showChartTooltip(event, nearest, unitLabel);
+    };
+    canvas.onmouseleave = () => {
+      activePoint = null;
+      renderChart();
+      hideChartTooltip();
+    };
   }
 
   function renderTotalChart() {
@@ -610,6 +724,7 @@
 
   function render() {
     preserveScrollPosition(() => {
+      hideChartTooltip();
       if (state.status?.selected_port && Array.from(elements.portSelect.options).some((option) => option.value === state.status.selected_port)) {
         syncControlValue(elements.portSelect, state.status.selected_port, 'port');
       }
@@ -658,24 +773,6 @@
     await loadPorts();
     render();
     setMessage('UART list refreshed.');
-  }
-
-  async function handleActivateConfig() {
-    const name = elements.configSelect.value;
-    if (!name) {
-      setMessage('Select a config before activation.', true);
-      return;
-    }
-    await fetchJson('/api/configs/activate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-    await loadStatus();
-    markDirty('config', false);
-    syncControlValue(elements.configSelect, state.status?.active_config_id, 'config', { force: true });
-    render();
-    setMessage(`Activated config ${name}.`);
   }
 
   async function handleStartMonitoring() {
@@ -751,6 +848,7 @@
 
   async function initialize() {
     try {
+      installChartTooltipGuards();
       await loadStatus();
       state.viewedSessionId = state.status?.active_session_id || null;
       state.viewedConfigName = state.status?.active_config || null;
@@ -788,10 +886,6 @@
 
   elements.delayMs.addEventListener('input', () => {
     markDirty('delayMs');
-  });
-
-  elements.activateConfig.addEventListener('click', () => {
-    handleActivateConfig().catch((error) => setMessage(error.message, true));
   });
 
   elements.startMonitoring.addEventListener('click', () => {
