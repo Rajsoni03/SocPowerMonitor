@@ -67,26 +67,81 @@ class Uart:
         self.file_descriptor_process = fdpexpect.fdspawn(self.serial_conn_obj, logfile=self.log_file_obj, use_poll=True)
         if self.log_level <= LOG_INFO:
             print("[ Info ] File descriptor process is opened.\n")
+
+    def consume_pending(self, expected_string, timeout=1):
+        if not self.file_descriptor_process:
+            raise UartSetupIssue("UART is not connected.")
+        try:
+            self.file_descriptor_process.expect([expected_string, pexpect.TIMEOUT, pexpect.EOF], timeout)
+        except Exception:
+            pass
     
     def disconnect(self):
         try:
-            if self.serial_conn_obj and self.serial_conn_obj.isOpen():
-                self.serial_conn_obj.close()
-                if self.log_level <= LOG_INFO:
-                    print('\n[ Info ] Serial connection obj is closed.')
             if self.file_descriptor_process and self.file_descriptor_process.isalive():
                 self.file_descriptor_process.close()
                 if self.log_level <= LOG_INFO:
                     print('[ Info ] File descriptor process is closed.')
+            if self.serial_conn_obj and self.serial_conn_obj.isOpen():
+                self.serial_conn_obj.close()
+                if self.log_level <= LOG_INFO:
+                    print('\n[ Info ] Serial connection obj is closed.')
             if self.log_file_obj:
                 self.log_file_obj.close()
                 if self.log_level <= LOG_INFO:
                     print('[ Info ] Uart log file closed.')
+        except OSError as e:
+            if self.log_level <= LOG_WARNING:
+                print("[ Warning ] Error while closing UART resources :", e)
         except Exception as e:
             if self.log_level <= LOG_ERROR:
                 print("[ Error ] Error while closing the UartInterface resources :", e)
                 print(traceback.format_exc())
+        finally:
+            self.file_descriptor_process = None
+            self.serial_conn_obj = None
+            self.log_file_obj = None
 
+    def run_command(self, cmd, expected_string, timeout=120, retry_count=1) -> str:
+        if not self.file_descriptor_process:
+            raise UartSetupIssue("UART is not connected.")
+
+        last_error = None
+        for iteration in range(retry_count):
+            try:
+                if self.log_level <= LOG_INFO:
+                    print('[ Info ] Sending Uart Command : ' + str(cmd))
+                self.file_descriptor_process.sendline(cmd)
+
+                if self.log_level <= LOG_INFO:
+                    print('[ Info ] Waiting for : ' + str(expected_string))
+                index = self.file_descriptor_process.expect([expected_string, pexpect.TIMEOUT, pexpect.EOF], timeout)
+
+                if index == 0:
+                    response = self.file_descriptor_process.before + self.file_descriptor_process.after
+                    if isinstance(response, bytes):
+                        return response.decode(encoding='iso8859-1', errors='ignore')
+                    return str(response)
+
+                if index == 1:
+                    last_error = UartSetupIssue(
+                        f"[ Error ] Timeout while sending command: {cmd}. "
+                        f"Expected '{expected_string}' within {timeout}s."
+                    )
+                    if self.log_level <= LOG_WARNING and iteration + 1 < retry_count:
+                        print(
+                            f"[ Warning ] Did not find expected_string in {timeout}s timeout. "
+                            f"Trying again... iteration - {iteration + 1}"
+                        )
+                    continue
+
+                raise UartSetupIssue(f"[ Error ] UART stream closed while sending command: {cmd}")
+            except Exception as e:
+                last_error = e
+
+        raise last_error if last_error is not None else UartSetupIssue(
+            f"[ Error ] Failed to execute UART command: {cmd}"
+        )
 
     def send_command(self, cmd, expected_string=None, return_code=None, timeout=120, retry_count=1) -> bool:
         # command success status
@@ -99,7 +154,7 @@ class Uart:
                 # run the command
                 if self.log_level <= LOG_INFO:
                     print('[ Info ] Sending Uart Command : ' + str(cmd))
-                self.file_descriptor_process.sendline(cmd + '\n')
+                self.file_descriptor_process.sendline(cmd)
         
                 # check the output if expected_string is defined
                 # skip otherwise
@@ -126,8 +181,8 @@ class Uart:
                     elif index == 1:  # Timeout and we did not received expected string
                         if self.log_level <= LOG_WARNING:
                             print(
-                                (f"[ Warning ] Did not fond expected_string in {timeout}s timeout.")
-                                (f"Trying Again... iteration - {iteration + 1}")
+                                f"[ Warning ] Did not find expected_string in {timeout}s timeout. "
+                                f"Trying again... iteration - {iteration + 1}"
                             )
         
             if index == 1:

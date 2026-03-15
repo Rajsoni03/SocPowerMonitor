@@ -1,0 +1,74 @@
+name: j722s-evm
+dut_name: j722s-evm
+soc_name: j722s
+sample_rate_hz: 20
+max_samples_per_command: 100
+default_delay_ms: 20
+default_sample_count: 20
+rails:
+  - name: vdd_core
+    ina_addr: 0x44
+    channel: 0
+    shunt_milliohm: 5
+    nominal_volts: 0.75
+    enabled: true
+  - name: vdd_ram_0v85
+    ina_addr: 0x44
+    channel: 1
+    shunt_milliohm: 5
+    nominal_volts: 0.85
+    enabled: true
+  - name: vda_phy_1v8
+    ina_addr: 0x45
+    channel: 0
+    shunt_milliohm: 5
+    nominal_volts: 1.8
+    enabled: true
+  - name: vdd_ioret_core
+    ina_addr: 0x45
+    channel: 1
+    shunt_milliohm: 10
+    nominal_volts: 1.1
+    enabled: true
+  - name: vdd_sd_dv
+    ina_addr: 0x46
+    channel: 0
+    shunt_milliohm: 10
+    nominal_volts: 1.8
+    enabled: true
+  - name: vdd_io_1v8
+    ina_addr: 0x46
+    channel: 1
+    shunt_milliohm: 10
+    nominal_volts: 1.8
+    enabled: true
+  - name: vsys_3v3
+    ina_addr: 0x47
+    channel: 0
+    shunt_milliohm: 10
+    nominal_volts: 3.3
+    enabled: true
+  - name: vdd_ddr_1v1
+    ina_addr: 0x47
+    channel: 1
+    shunt_milliohm: 5
+    nominal_volts: 1.1
+    enabled: true
+  - name: vdd_io_3v3
+    ina_addr: 0x48
+    channel: 0
+    shunt_milliohm: 10
+    nominal_volts: 3.3
+    enabled: true
+  - name: vda_pll_1v8
+    ina_addr: 0x48
+    channel: 1
+    shunt_milliohm: 10
+    nominal_volts: 1.8
+    enabled: true
+  - name: vdd1_ddr_1v8
+    ina_addr: 0x49
+    channel: 0
+    shunt_milliohm: 5
+    nominal_volts: 1.8
+    enabled: true

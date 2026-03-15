@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SocPowerMonitor Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+  </head>
+  <body>
+    <div class="page-shell">
+      <section class="topbar panel">
+        <div class="topbar-title">
+          <p class="panel-kicker">SocPowerMonitor</p>
+          <h1>Power dashboard</h1>
+        </div>
+        <div class="topbar-status">
+          <button type="button" class="secondary-button" id="sync-dashboard">Sync</button>
+          <div class="status-pill" id="monitor-status-pill">Idle</div>
+          <p id="status-detail">Waiting for UART selection.</p>
+          <a class="ghost-link" id="export-link" href="#" hidden>Export current session CSV</a>
+        </div>
+      </section>
+
+      <main class="dashboard-grid">
+        <section class="panel panel-controls">
+          <div class="panel-heading">
+            <p class="panel-kicker">Capture Control</p>
+            <h2>UART and sampling</h2>
+          </div>
+
+          <div class="controls-grid">
+            <label class="field">
+              <span>UART port</span>
+              <div class="field-row">
+                <select id="port-select"></select>
+                <button type="button" class="secondary-button" id="refresh-ports">Refresh</button>
+              </div>
+            </label>
+
+            <label class="field">
+              <span>Target config</span>
+              <div class="field-row">
+                <select id="config-select"></select>
+                <button type="button" class="secondary-button" id="activate-config">Activate</button>
+              </div>
+            </label>
+
+            <label class="field">
+              <span>Samples / command</span>
+              <input id="sample-count" type="number" min="1" step="1" value="20">
+            </label>
+
+            <label class="field">
+              <span>Delay (ms)</span>
+              <input id="delay-ms" type="number" min="1" step="1" value="20">
+            </label>
+          </div>
+
+          <div class="action-row">
+            <button type="button" class="primary-button" id="start-monitoring">Start monitoring</button>
+            <button type="button" class="danger-button" id="stop-monitoring">Stop</button>
+          </div>
+
+          <div class="message-strip" id="message-strip">Loading dashboard state...</div>
+        </section>
+
+        <section class="panel session-panel">
+          <div class="panel-heading">
+            <p class="panel-kicker">History</p>
+            <h2>Recent sessions</h2>
+          </div>
+          <div id="sessions-list" class="sessions-list"></div>
+        </section>
+
+        <section class="panel total-chart-panel">
+          <div class="panel-heading">
+            <p class="panel-kicker">Combined Trend</p>
+            <h2>Total power over time</h2>
+          </div>
+          <canvas id="total-power-chart" height="340" style="height: 340px;"></canvas>
+        </section>
+
+        <section class="stats-grid">
+          <article class="panel stat-card">
+            <p class="stat-label">Total power</p>
+            <h2 id="stat-total-power">0.0 mW</h2>
+            <p class="stat-meta" id="stat-power-trend">No live samples yet</p>
+          </article>
+          <article class="panel stat-card">
+            <p class="stat-label">Tracked rails</p>
+            <h2 id="stat-rail-count">0</h2>
+            <p class="stat-meta" id="stat-config">No config active</p>
+          </article>
+        </section>
+
+        <section class="panel rails-trends-panel">
+          <div class="panel-heading">
+            <p class="panel-kicker">Per-Rail Trends</p>
+            <h2>Individual rail charts</h2>
+          </div>
+          <div id="rail-chart-grid" class="rail-chart-grid"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+  </body>
+</html>
