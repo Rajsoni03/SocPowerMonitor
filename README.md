@@ -27,4 +27,4 @@ Available API endpoints:
 - `GET /api/export.csv` — stream CSV export
 - `GET /api/stream` — server-sent events for live charts
 
-Data persists to `data/power.db` (SQLite). Config profiles live under `config/`.
+Data persists to `data/power.db` (SQLite). Config profiles live under `config/` as JSON files.

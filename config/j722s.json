@@ -1,0 +1,94 @@
+{
+  "name": "j722s-evm",
+  "dut_name": "j722s-evm",
+  "soc_name": "j722s",
+  "sample_rate_hz": 20,
+  "max_samples_per_command": 100,
+  "default_delay_ms": 20,
+  "default_sample_count": 20,
+  "rails": [
+    {
+      "name": "vdd_core",
+      "enabled": true,
+      "ignore_for_soc_total": false
+    },
+    {
+      "name": "vdd_cpu",
+      "enabled": true,
+      "ignore_for_soc_total": false,
+      "aliases": [
+        "vdd_ram_0v85"
+      ]
+    },
+    {
+      "name": "vdd_gpu",
+      "enabled": true,
+      "ignore_for_soc_total": false,
+      "aliases": [
+        "vda_phy_1v8"
+      ]
+    },
+    {
+      "name": "vdd_ddr",
+      "enabled": true,
+      "ignore_for_soc_total": false,
+      "aliases": [
+        "vdd_ddr_1v1"
+      ]
+    },
+    {
+      "name": "vdd_mcu",
+      "enabled": true,
+      "ignore_for_soc_total": false,
+      "aliases": [
+        "vdd_sd_dv"
+      ]
+    },
+    {
+      "name": "vdd_io_1v8",
+      "enabled": true,
+      "ignore_for_soc_total": false
+    },
+    {
+      "name": "vdd_usb",
+      "enabled": true,
+      "ignore_for_soc_total": false,
+      "aliases": [
+        "vda_pll_1v8"
+      ]
+    },
+    {
+      "name": "vdd_pcie",
+      "enabled": true,
+      "ignore_for_soc_total": false
+    },
+    {
+      "name": "vdd_serdes",
+      "enabled": true,
+      "ignore_for_soc_total": false,
+      "aliases": [
+        "vdd_ioret_core"
+      ]
+    },
+    {
+      "name": "vsys_3v3",
+      "enabled": true,
+      "ignore_for_soc_total": true
+    },
+    {
+      "name": "vdd_ddr_1v1",
+      "enabled": true,
+      "ignore_for_soc_total": false
+    },
+    {
+      "name": "vdd_io_3v3",
+      "enabled": true,
+      "ignore_for_soc_total": false
+    },
+    {
+      "name": "vdd1_ddr_1v8",
+      "enabled": true,
+      "ignore_for_soc_total": true
+    }
+  ]
+}

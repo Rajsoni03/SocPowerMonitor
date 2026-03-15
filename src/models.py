@@ -13,20 +13,12 @@ class Rail(db.Model):
     __tablename__ = 'rail'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(64), unique=True, nullable=False)
-    ina_addr = db.Column(db.String(8), nullable=True)
-    channel = db.Column(db.Integer, nullable=True)
-    shunt_milliohm = db.Column(db.Float, nullable=True)
-    nominal_volts = db.Column(db.Float, nullable=True)
     enabled = db.Column(db.Boolean, default=True)
 
     def to_dict(self):
         return {
             'id': self.id,
             'name': self.name,
-            'ina_addr': self.ina_addr,
-            'channel': self.channel,
-            'shunt_milliohm': self.shunt_milliohm,
-            'nominal_volts': self.nominal_volts,
             'enabled': self.enabled,
         }
 

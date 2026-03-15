@@ -9,7 +9,7 @@ from serial.tools import list_ports
 
 from .models import db, Rail, Session, Sample
 from .parser import parse_measurement
-from .uart import LOG_INFO, Uart
+from .uart import LOG_NONE, Uart
 
 PROMPT = '=>'
 
@@ -57,10 +57,6 @@ class PowerService:
             row = existing.get(rail['name'])
             if not row:
                 row = Rail(name=rail['name'])
-            row.ina_addr = hex(rail.get('ina_addr')) if isinstance(rail.get('ina_addr'), int) else str(rail.get('ina_addr'))
-            row.channel = rail.get('channel')
-            row.shunt_milliohm = rail.get('shunt_milliohm')
-            row.nominal_volts = rail.get('nominal_volts')
             row.enabled = bool(rail.get('enabled', True))
             db.session.add(row)
         db.session.commit()
@@ -111,7 +107,7 @@ class PowerService:
 
     # ---------- capture loop ----------
     def _capture_loop(self, samples: int, delay_ms: int):
-        uart = Uart(self.selected_port, log_level=LOG_INFO)
+        uart = Uart(self.selected_port, log_level=LOG_NONE)
         try:
             uart.connect()
             uart.consume_pending(PROMPT, timeout=1)
@@ -194,10 +190,19 @@ class PowerService:
         readings = []
         updated_at = None
         total_power_mw = 0.0
+        ignored_rails = {
+            rail['name']
+            for rail in (self.active_config or {}).get('rails', [])
+                if rail.get('ignore_for_soc_total')
+        }
         if self.last_stream_payload:
             readings = self.last_stream_payload.get('readings', [])
             updated_at = self.last_stream_payload.get('ts')
-            total_power_mw = sum((item.get('power_mw') or 0.0) for item in readings)
+            total_power_mw = sum(
+                (item.get('power_mw') or 0.0)
+                for item in readings
+                if item.get('rail') not in ignored_rails
+            )
 
         return {
             'selected_port': self.selected_port,

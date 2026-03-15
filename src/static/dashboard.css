@@ -284,7 +284,7 @@ canvas {
 
 .session-item,
 .rail-chart-card {
-  padding: 16px;
+  padding: 12px;
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(20, 31, 48, 0.94), rgba(10, 15, 24, 0.94));
   border: 1px solid var(--line);
@@ -292,15 +292,55 @@ canvas {
 
 .session-item h3,
 .rail-chart-card h3 {
-  margin: 0 0 8px;
-  font-size: 1rem;
+  margin: 0 0 6px;
+  font-size: 0.86rem;
 }
 
 .rail-chart-card strong {
   display: block;
   font-family: "IBM Plex Serif", "Georgia", serif;
-  font-size: 1.5rem;
-  margin-bottom: 10px;
+  font-size: 1.08rem;
+  line-height: 1.15;
+  margin-bottom: 6px;
+}
+
+.rail-total-flag {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.rail-total-flag.included {
+  background: rgba(74, 222, 128, 0.14);
+  color: #86efac;
+}
+
+.rail-total-flag.excluded {
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+}
+
+.rail-total-flag.unknown {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fcd34d;
+}
+
+.rail-chart-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.rail-chart-card p {
+  margin: 0 0 8px;
+  font-size: 0.76rem;
 }
 
 .trend-up {
@@ -336,7 +376,7 @@ canvas {
 }
 
 .rail-chart-card canvas {
-  height: 160px;
+  height: 132px;
 }
 
 @media (max-width: 1180px) {

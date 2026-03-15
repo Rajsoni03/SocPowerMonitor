@@ -7,6 +7,7 @@
     history: [],
     eventSource: null,
     viewedSessionId: null,
+    viewedConfigName: null,
     formDirty: {
       port: false,
       config: false,
@@ -128,9 +129,43 @@
     state.formDirty[dirtyKey] = isDirty;
   }
 
+  function normalizeRailKey(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  function currentIgnoredRails() {
+    const config = state.configs.find((item) => (
+      item.name === state.viewedConfigName
+      || item.config_id === state.viewedConfigName
+      || item.config_id === state.status?.active_config_id
+    ));
+    return new Set(
+      (config?.rails || [])
+        .filter((rail) => rail.ignore_for_soc_total)
+        .flatMap((rail) => [rail.name, ...(rail.aliases || [])])
+        .map((railName) => normalizeRailKey(railName))
+    );
+  }
+
+  function currentConfigRailMap() {
+    const config = state.configs.find((item) => (
+      item.name === state.viewedConfigName
+      || item.config_id === state.viewedConfigName
+      || item.config_id === state.status?.active_config_id
+    ));
+    const entries = [];
+    (config?.rails || []).forEach((rail) => {
+      [rail.name, ...(rail.aliases || [])].forEach((name) => {
+        entries.push([normalizeRailKey(name), rail]);
+      });
+    });
+    return new Map(entries);
+  }
+
   function computePoint(ts, readings) {
     const rails = {};
     let totalPower = 0;
+    const ignoredRails = currentIgnoredRails();
 
     readings.forEach((reading) => {
       const name = reading.rail || 'unknown';
@@ -139,7 +174,9 @@
         current_ma: reading.current_ma,
         power_mw: reading.power_mw,
       };
-      totalPower += reading.power_mw || 0;
+      if (!ignoredRails.has(name)) {
+        totalPower += reading.power_mw || 0;
+      }
     });
 
     return { ts, rails, totalPower };
@@ -259,6 +296,8 @@
     const rows = [];
     const batchSize = 1000;
     let offset = 0;
+    const session = state.sessions.find((item) => item.id === Number(sessionId));
+    state.viewedConfigName = session?.config_name || state.status?.active_config || null;
 
     while (true) {
       const batch = await fetchJson(
@@ -363,12 +402,15 @@
     }
     const height = Number(canvas.dataset.logicalHeight);
     const numericValues = values.filter((value) => Number.isFinite(value));
-    const leftPad = 18;
-    const rightPad = 18;
-    const topPad = 24;
-    const bottomPad = 24;
+    const leftPad = 52;
+    const rightPad = 20;
+    const topPad = 36;
+    const bottomPad = 34;
     const plotHeight = height - topPad - bottomPad;
     const plotWidth = width - leftPad - rightPad;
+    const xTickCount = Math.min(4, Math.max(labels.length - 1, 1));
+    const yTickCount = 4;
+    const showXAxisLabels = options.showXAxisLabels !== false;
 
     canvas.style.height = `${height}px`;
 
@@ -379,11 +421,12 @@
 
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, canvas.width, canvas.height);
+    context.font = '11px "IBM Plex Sans", sans-serif';
 
     context.strokeStyle = 'rgba(148, 163, 184, 0.14)';
     context.lineWidth = 1;
-    for (let i = 0; i < 4; i += 1) {
-      const y = topPad + (plotHeight / 3) * i;
+    for (let i = 0; i <= yTickCount; i += 1) {
+      const y = topPad + (plotHeight / yTickCount) * i;
       context.beginPath();
       context.moveTo(leftPad, y);
       context.lineTo(width - rightPad, y);
@@ -407,11 +450,32 @@
     const minValue = rawMinValue;
     const range = Math.max(maxValue - minValue, minRange);
     const xStep = values.length > 1 ? plotWidth / (values.length - 1) : 0;
+    const yValueStep = range / yTickCount;
 
     const points = values.map((value, index) => ({
       x: leftPad + xStep * index,
       y: Number.isFinite(value) ? height - bottomPad - ((value - minValue) / range) * plotHeight : null,
     }));
+
+    context.fillStyle = 'rgba(148, 163, 184, 0.9)';
+    context.textAlign = 'right';
+    for (let i = 0; i <= yTickCount; i += 1) {
+      const tickValue = minValue + (yValueStep * (yTickCount - i));
+      const y = topPad + (plotHeight / yTickCount) * i;
+      context.fillText(`${tickValue.toFixed(0)} ${unitLabel}`, leftPad - 6, y + 4);
+    }
+
+    if (showXAxisLabels) {
+      context.textAlign = 'center';
+      for (let i = 0; i <= xTickCount; i += 1) {
+        const labelIndex = Math.min(
+          labels.length - 1,
+          Math.round((labels.length - 1) * (i / xTickCount))
+        );
+        const x = leftPad + plotWidth * (i / xTickCount);
+        context.fillText(labels[labelIndex] || '', x, height - 10);
+      }
+    }
 
     context.beginPath();
     let started = false;
@@ -448,11 +512,7 @@
     }
 
     context.fillStyle = 'rgba(203, 213, 225, 0.9)';
-    context.font = '12px "IBM Plex Sans", sans-serif';
-    context.textAlign = 'left';
-    context.fillText(labels[0] || '', leftPad, height - 6);
     context.textAlign = 'right';
-    context.fillText(labels[labels.length - 1] || '', width - rightPad, height - 6);
     context.fillText(`${rawMaxValue.toFixed(1)} ${unitLabel}`, width - rightPad, 18);
     context.textAlign = 'left';
   }
@@ -476,6 +536,7 @@
     const current = latestPoint();
     const previous = previousPoint();
     const previousRails = previous ? previous.rails : {};
+    const configRails = currentConfigRailMap();
     const labels = state.history.map((point) => formatTimestamp(point.ts));
 
     elements.railChartGrid.innerHTML = '';
@@ -491,7 +552,16 @@
       const latest = current?.rails[railName];
       const previousPower = previousRails[railName]?.power_mw;
       const latestPower = Number.isFinite(latest?.power_mw) ? latest.power_mw : NaN;
+      const latestVoltageMv = Number.isFinite(latest?.voltage_v) ? latest.voltage_v * 1000 : NaN;
+      const latestCurrentMa = Number.isFinite(latest?.current_ma) ? latest.current_ma : NaN;
       const delta = Number.isFinite(previousPower) ? latestPower - previousPower : NaN;
+      const railConfig = configRails.get(normalizeRailKey(railName));
+      const badgeClass = railConfig
+        ? (railConfig.ignore_for_soc_total ? 'excluded' : 'included')
+        : 'unknown';
+      const badgeLabel = railConfig
+        ? (railConfig.ignore_for_soc_total ? 'Out of SoC total' : 'In SoC total')
+        : 'Config missing';
       const color = railColor(railName, index);
       const values = state.history.map((point) => {
         const power = point.rails[railName]?.power_mw;
@@ -502,9 +572,16 @@
       card.className = 'rail-chart-card';
       card.innerHTML = `
         <h3>${railName}</h3>
+        <div class="rail-total-flag ${badgeClass}">
+          ${badgeLabel}
+        </div>
         <strong>${formatNumber(latestPower)} mW</strong>
+        <div class="rail-chart-meta">
+          <span>${formatNumber(latestVoltageMv, 0)} mV</span>
+          <span>${formatNumber(latestCurrentMa)} mA</span>
+        </div>
         <p class="${trendClass(delta)}">${trendLabel(delta, 'mW')}</p>
-        <canvas height="160"></canvas>
+        <canvas height="132"></canvas>
       `;
       fragment.appendChild(card);
 
@@ -514,13 +591,14 @@
         values,
         labels,
         color,
+        railName,
       });
     });
 
     elements.railChartGrid.appendChild(fragment);
     window.requestAnimationFrame(() => {
-      chartDefs.forEach(({ canvas, values, labels, color }) => {
-        drawLineChart(canvas, values, labels, color, `${color}22`, 'mW');
+      chartDefs.forEach(({ canvas, values, labels, color, railName }) => {
+        drawLineChart(canvas, values, labels, color, `${color}22`, 'mW', { showXAxisLabels: false });
       });
     });
   }
@@ -652,6 +730,7 @@
     markDirty('delayMs', false);
     state.history = [];
     state.viewedSessionId = session.session_id;
+    state.viewedConfigName = state.status?.active_config || null;
     await loadStatus();
     syncControlValue(elements.portSelect, state.status?.selected_port, 'port', { force: true });
     syncControlValue(elements.configSelect, state.status?.active_config_id, 'config', { force: true });
@@ -674,6 +753,7 @@
     if (state.status?.active_session_id) {
       state.viewedSessionId = state.status.active_session_id;
     }
+    state.viewedConfigName = state.status?.active_config || null;
     render();
     setMessage('Monitoring stopped.');
   }
@@ -682,6 +762,7 @@
     try {
       await loadStatus();
       state.viewedSessionId = state.status?.active_session_id || null;
+      state.viewedConfigName = state.status?.active_config || null;
       await Promise.all([loadPorts(), loadConfigs(), loadSessions()]);
       if (state.status?.active_session_id) {
         await loadHistoryForSession(state.status.active_session_id);
