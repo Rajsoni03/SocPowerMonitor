@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
 from .config_loader import ConfigLoader
 from .models import Rail, Sample, Session, db, init_db
@@ -120,6 +120,9 @@ def create_app(test_config: Optional[dict] = None):
         rails_filter = request.args.get('rails')
         rails = set(rails_filter.split(',')) if rails_filter else None
 
+        def csv_value(value):
+            return '' if value is None else value
+
         def generate():
             yield 'ts,rail,voltage_v,current_ma,power_mw,raw\n'
             query = Sample.query.filter_by(session_id=session_id).order_by(Sample.ts)
@@ -132,9 +135,9 @@ def create_app(test_config: Optional[dict] = None):
                 writer.writerow([
                     f'{row.ts.isoformat()}Z',
                     rail_name,
-                    row.voltage_v or '',
-                    row.current_ma or '',
-                    row.power_mw or '',
+                    csv_value(row.voltage_v),
+                    csv_value(row.current_ma),
+                    csv_value(row.power_mw),
                     row.raw_payload or '',
                 ])
                 yield buffer.getvalue()
@@ -142,7 +145,7 @@ def create_app(test_config: Optional[dict] = None):
         headers = {
             'Content-Disposition': f'attachment; filename="session_{session_id}.csv"'
         }
-        return Response(generate(), mimetype='text/csv', headers=headers)
+        return Response(stream_with_context(generate()), mimetype='text/csv', headers=headers)
 
     @app.get('/api/stream')
     def api_stream():

@@ -139,12 +139,14 @@
       || item.config_id === state.viewedConfigName
       || item.config_id === state.status?.active_config_id
     ));
-    return new Set(
+    const ignoredRails = new Set(
       (config?.rails || [])
         .filter((rail) => rail.ignore_for_soc_total)
         .flatMap((rail) => [rail.name, ...(rail.aliases || [])])
         .map((railName) => normalizeRailKey(railName))
     );
+    console.log([...ignoredRails]);
+    return ignoredRails;
   }
 
   function currentConfigRailMap() {
@@ -536,7 +538,6 @@
     const current = latestPoint();
     const previous = previousPoint();
     const previousRails = previous ? previous.rails : {};
-    const configRails = currentConfigRailMap();
     const labels = state.history.map((point) => formatTimestamp(point.ts));
 
     elements.railChartGrid.innerHTML = '';
@@ -555,13 +556,6 @@
       const latestVoltageMv = Number.isFinite(latest?.voltage_v) ? latest.voltage_v * 1000 : NaN;
       const latestCurrentMa = Number.isFinite(latest?.current_ma) ? latest.current_ma : NaN;
       const delta = Number.isFinite(previousPower) ? latestPower - previousPower : NaN;
-      const railConfig = configRails.get(normalizeRailKey(railName));
-      const badgeClass = railConfig
-        ? (railConfig.ignore_for_soc_total ? 'excluded' : 'included')
-        : 'unknown';
-      const badgeLabel = railConfig
-        ? (railConfig.ignore_for_soc_total ? 'Out of SoC total' : 'In SoC total')
-        : 'Config missing';
       const color = railColor(railName, index);
       const values = state.history.map((point) => {
         const power = point.rails[railName]?.power_mw;
@@ -572,9 +566,6 @@
       card.className = 'rail-chart-card';
       card.innerHTML = `
         <h3>${railName}</h3>
-        <div class="rail-total-flag ${badgeClass}">
-          ${badgeLabel}
-        </div>
         <strong>${formatNumber(latestPower)} mW</strong>
         <div class="rail-chart-meta">
           <span>${formatNumber(latestVoltageMv, 0)} mV</span>

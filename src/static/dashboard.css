@@ -304,31 +304,6 @@ canvas {
   margin-bottom: 6px;
 }
 
-.rail-total-flag {
-  display: inline-flex;
-  align-items: center;
-  margin-bottom: 8px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  font-size: 0.68rem;
-  font-weight: 600;
-}
-
-.rail-total-flag.included {
-  background: rgba(74, 222, 128, 0.14);
-  color: #86efac;
-}
-
-.rail-total-flag.excluded {
-  background: rgba(148, 163, 184, 0.14);
-  color: #cbd5e1;
-}
-
-.rail-total-flag.unknown {
-  background: rgba(245, 158, 11, 0.14);
-  color: #fcd34d;
-}
-
 .rail-chart-meta {
   display: flex;
   justify-content: space-between;
@@ -336,6 +311,12 @@ canvas {
   margin-bottom: 6px;
   color: var(--muted);
   font-size: 0.76rem;
+}
+
+rail-chart-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .rail-chart-card p {

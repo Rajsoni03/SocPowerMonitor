@@ -3,10 +3,10 @@ import pexpect
 import serial
 from pexpect import fdpexpect
 
-LOG_NONE = -1
 LOG_ERROR = 0
 LOG_WARNING = 1
 LOG_INFO = 2
+LOG_NONE = 10
 
 _log_level_dict = {
     LOG_NONE: 'NONE',
