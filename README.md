@@ -4,6 +4,9 @@ SocPowerMonitor is a Flask-based power monitoring dashboard for TI Jacinto platf
 
 The project is aimed at board bring-up, lab validation, workload comparison, and quick power analysis without depending on heavyweight desktop tooling.
 
+## Screenshot
+![image](./img.png)
+
 ## Features
 
 - Live rail-wise power monitoring from UART automation firmware
@@ -38,12 +41,25 @@ The project is aimed at board bring-up, lab validation, workload comparison, and
 
 ### Setup
 
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python3 -m src.app
-```
+- Clone the repo
+
+  ```bash 
+  git clone https://github.com/Rajsoni03/SocPowerMonitor.git
+  cd SocPowerMonitor
+  ```
+- Create python virtual environment and install requrements
+
+  ```bash
+  python3 -m venv venv
+  source venv/bin/activate
+  pip install -r requirements.txt
+  ```
+
+- Run the Application
+
+  ```bash
+  python3 -m src.app
+  ```
 
 The server runs on `http://localhost:8000/`.
 
