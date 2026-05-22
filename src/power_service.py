@@ -24,7 +24,10 @@ PROMPT = '=>'
 
 def list_uart_ports() -> List[Dict]:
     ports = []
-    for p in list_ports.comports():
+    for p in sorted(list_ports.comports(), key=lambda p: p.device):
+        name = p.device.split('/')[-1]
+        if not (name.startswith('ttyUSB') or name.startswith('ttyACM')):
+            continue
         ports.append({
             'device': p.device,
             'description': p.description,
