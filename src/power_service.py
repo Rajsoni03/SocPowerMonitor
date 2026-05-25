@@ -1,9 +1,12 @@
 import datetime as dt
+import getpass
 import json
+import logging
 import math
 import queue
 import threading
 import time
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from serial.tools import list_ports
@@ -15,9 +18,12 @@ from .models import (
     Rail,
     Session,
     Sample,
+    _utcnow,
 )
 from .parser import parse_measurement
 from .uart import LOG_NONE, Uart
+
+log = logging.getLogger(__name__)
 
 PROMPT = '=>'
 
@@ -45,6 +51,9 @@ class PowerService:
         self.config_loader = config_loader
         self.selected_port: Optional[str] = None
         self.active_config: Optional[Dict] = None
+
+        # T2: single lock protecting all mutable shared state
+        self._state_lock = threading.Lock()
         self.active_session_id: Optional[int] = None
         self.capture_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
@@ -54,6 +63,19 @@ class PowerService:
         self.current_command_interval: Optional[float] = None
         self.last_stream_payload: Optional[Dict] = None
         self.last_error: Optional[str] = None
+
+        # BK1: rail name → rail id cache; warmed once per session start
+        self._rail_id_cache: Dict[str, int] = {}
+
+        # DB capture: when False, samples are streamed but not written to DB
+        self.persist_to_db: bool = False
+
+        # Log dump: raw UART output written to file when active
+        self.log_dump_path: Optional[str] = None
+        self._log_dump_file = None
+        self._log_dump_lock = threading.Lock()
+        self._log_dump_max_samples: Optional[int] = None
+        self._log_dump_sample_count: int = 0
 
     # ---------- configuration ----------
     def activate_config(self, config_name: str) -> Dict:
@@ -118,15 +140,17 @@ class PowerService:
         with self.app.app_context():
             session = Session.query.get(session_id)
             if session and not session.ended_at:
-                session.ended_at = dt.datetime.utcnow()
+                session.ended_at = _utcnow()
                 db.session.commit()
 
+    # T2/T3: all shared-state mutations go through the lock
     def _clear_capture_state(self, thread: threading.Thread, session_id: Optional[int]):
-        if self.capture_thread is thread:
-            self.capture_thread = None
-        if self.active_session_id == session_id:
-            self.active_session_id = None
-            self.current_command_interval = None
+        with self._state_lock:
+            if self.capture_thread is thread:
+                self.capture_thread = None
+            if self.active_session_id == session_id:
+                self.active_session_id = None
+                self.current_command_interval = None
 
     @staticmethod
     def _is_number(value) -> bool:
@@ -158,7 +182,6 @@ class PowerService:
             and self._is_number(eff_ratio)
             and out_v
         ):
-            # for custom mode, we calculate the actual current and power based on input voltage/current, output voltage, and efficiency ratio
             actual_current_ma = ((input_current_ma * input_voltage_v) / out_v) * eff_ratio
             actual_power_mw = actual_current_ma * out_v
             display_voltage_v = out_v
@@ -187,6 +210,54 @@ class PowerService:
         cfg = self._config_for_session(rows[0].session)
         return self.annotate_readings([row.to_dict() for row in rows], cfg)
 
+    def set_persist_to_db(self, enabled: bool):
+        with self._state_lock:
+            if self.capture_thread and self.capture_thread.is_alive():
+                raise RuntimeError('Cannot change DB capture while monitoring is active')
+            self.persist_to_db = enabled
+
+    # ---------- log dump ----------
+    def _resolve_dump_path(self, file_path: str) -> str:
+        """Return file_path, or a counter-suffixed variant if the file already exists."""
+        p = Path(file_path)
+        if not p.exists():
+            return str(p)
+        stem = p.stem
+        suffix = p.suffix or '.txt'
+        parent = p.parent
+        counter = 1
+        while True:
+            candidate = parent / f'{stem}_{counter}{suffix}'
+            if not candidate.exists():
+                return str(candidate)
+            counter += 1
+
+    def start_log_dump(self, file_path: str, max_samples: Optional[int] = None) -> str:
+        """Start writing raw UART output to *file_path*. Returns the actual path used."""
+        with self._log_dump_lock:
+            if self._log_dump_file is not None:
+                raise RuntimeError('Log dump already active')
+            resolved = self._resolve_dump_path(file_path)
+            Path(resolved).parent.mkdir(parents=True, exist_ok=True)
+            self._log_dump_file = open(resolved, 'w', encoding='utf-8')  # noqa: WPS515
+            self.log_dump_path = resolved
+            self._log_dump_max_samples = max_samples
+            self._log_dump_sample_count = 0
+            return resolved
+
+    def stop_log_dump(self):
+        """Stop writing raw UART output to file."""
+        with self._log_dump_lock:
+            if self._log_dump_file is not None:
+                try:
+                    self._log_dump_file.close()
+                except Exception:
+                    pass
+                self._log_dump_file = None
+            self.log_dump_path = None
+            self._log_dump_max_samples = None
+            self._log_dump_sample_count = 0
+
     # ---------- session control ----------
     def start_session(
         self,
@@ -195,7 +266,9 @@ class PowerService:
         delay_ms: Optional[int] = None,
         command_interval: Optional[int] = None,
     ) -> Dict:
-        if self.capture_thread and self.capture_thread.is_alive():
+        with self._state_lock:
+            running = self.capture_thread and self.capture_thread.is_alive()
+        if running:
             raise RuntimeError('Capture already running')
         if not self.selected_port:
             raise RuntimeError('UART port not selected')
@@ -223,53 +296,73 @@ class PowerService:
         self.current_delay_ms = delay
         self.current_command_interval = command_interval
         self.last_error = None
+        persist_to_db = self.persist_to_db
 
-        with self.app.app_context():
-            session = Session(
-                config_name=cfg['name'],
-                config_hash=cfg['__hash__'],
-                session_metadata=self._build_session_metadata(metadata, cfg),
-            )
-            db.session.add(session)
-            db.session.commit()
-            self.active_session_id = session.id
+        # BK1: clear rail cache so it's re-warmed for the new session
+        self._rail_id_cache.clear()
+
+        session_id = None
+        if persist_to_db:
+            with self.app.app_context():
+                session = Session(
+                    config_name=cfg['name'],
+                    config_hash=cfg['__hash__'],
+                    session_metadata=self._build_session_metadata(metadata, cfg),
+                )
+                db.session.add(session)
+                db.session.commit()
+                session_id = session.id
+
+        with self._state_lock:
+            self.active_session_id = session_id
 
         self.stop_event.clear()
-        self.capture_thread = threading.Thread(
+        thread = threading.Thread(
             target=self._capture_loop,
-            args=(session.id, port, self._clean_config_snapshot(cfg), samples, delay, self.current_command_interval),
+            args=(session_id, port, self._clean_config_snapshot(cfg), samples, delay, self.current_command_interval, persist_to_db),
             daemon=True,
         )
-        self.capture_thread.start()
+        with self._state_lock:
+            self.capture_thread = thread
+        thread.start()
         return {
-            'session_id': self.active_session_id,
+            'session_id': session_id,
             'samples_per_command': samples,
             'delay_ms': delay,
             'command_interval': self.current_command_interval,
+            'persist_to_db': persist_to_db,
         }
 
     def stop_session(self):
-        thread = self.capture_thread
-        session_id = self.active_session_id
+        with self._state_lock:
+            thread = self.capture_thread
+            session_id = self.active_session_id
         if not thread:
             return
         self.stop_event.set()
-        thread.join(timeout=5)
+        thread.join(timeout=10)
+        # T1: whether or not the thread stopped in time, always clean up state.
+        # If still alive, the thread will finish on its own (stop_event is set)
+        # and its finally block will call _clear_capture_state again (idempotent).
         if thread.is_alive():
-            self.last_error = 'Timed out while waiting for capture loop to stop'
-            return
+            log.warning(
+                'Capture thread did not stop within 10s for session %s; '
+                'forcing state clear. Thread will finish on its own.',
+                session_id,
+            )
         self._mark_session_ended(session_id)
         self._clear_capture_state(thread, session_id)
 
     # ---------- capture loop ----------
     def _capture_loop(
         self,
-        session_id: int,
+        session_id: Optional[int],
         port: str,
         cfg: Dict,
         samples: int,
         delay_ms: int,
         command_interval: float,
+        persist_to_db: bool = False,
     ):
         thread = threading.current_thread()
         uart = Uart(port, log_level=LOG_NONE)
@@ -286,9 +379,31 @@ class PowerService:
             while not self.stop_event.is_set():
                 timeout = max(5, int(samples * delay_ms / 1000) + 5)
                 raw = uart.run_command(f"auto measure power {samples} {delay_ms}", PROMPT, timeout=timeout)
+                if raw.strip():
+                    with self._log_dump_lock:
+                        if self._log_dump_file is not None:
+                            try:
+                                ts_str = dt.datetime.utcnow().isoformat() + 'Z'
+                                self._log_dump_file.write(f'# {ts_str}\n{raw}\n---\n')
+                                self._log_dump_file.flush()
+                                self._log_dump_sample_count += 1
+                                if (
+                                    self._log_dump_max_samples is not None
+                                    and self._log_dump_sample_count >= self._log_dump_max_samples
+                                ):
+                                    try:
+                                        self._log_dump_file.close()
+                                    except Exception:
+                                        pass
+                                    self._log_dump_file = None
+                                    self.log_dump_path = None
+                                    log.info('Log dump auto-stopped after %d samples', self._log_dump_sample_count)
+                            except Exception as exc:
+                                log.warning('Failed to write to log dump file: %s', exc)
                 readings = self.annotate_readings(parse_measurement(raw), cfg)
                 if readings:
-                    self._persist_samples(session_id, readings)
+                    if persist_to_db and session_id is not None:
+                        self._persist_samples(session_id, readings)
                     self._push_stream(readings)
                 elif raw.strip():
                     self._push_stream([], error=f'No measurements parsed from device output: {raw.strip()[:240]}')
@@ -300,7 +415,6 @@ class PowerService:
                         time.sleep(sleep_for)
                         remaining -= sleep_for
         except Exception as exc:
-            # push error into stream for UI consumption
             self._push_stream([], error=str(exc))
         finally:
             uart.disconnect()
@@ -308,19 +422,24 @@ class PowerService:
             self._clear_capture_state(thread, session_id)
 
     def _persist_samples(self, session_id: int, readings: List[Dict]):
-        ts = dt.datetime.utcnow()
+        ts = _utcnow()
         with self.app.app_context():
-            rail_lookup = {r.name: r for r in Rail.query.all()}
+            # BK1: warm rail cache once (on first call or after cache was cleared)
+            if not self._rail_id_cache:
+                self._rail_id_cache = {r.name: r.id for r in Rail.query.all()}
+
             for r in readings:
-                rail = rail_lookup.get(r['rail'])
-                if not rail:
+                rail_id = self._rail_id_cache.get(r['rail'])
+                if rail_id is None:
+                    # New rail not yet in DB: create it
                     rail = Rail(name=r['rail'], enabled=True)
                     db.session.add(rail)
                     db.session.flush()
-                    rail_lookup[rail.name] = rail
+                    self._rail_id_cache[rail.name] = rail.id
+                    rail_id = rail.id
                 sample = Sample(
                     session_id=session_id,
-                    rail_id=rail.id,
+                    rail_id=rail_id,
                     ts=ts,
                     voltage_v=r.get('voltage_v'),
                     current_ma=r.get('current_ma'),
@@ -331,16 +450,32 @@ class PowerService:
             db.session.commit()
 
     def _push_stream(self, readings: List[Dict], error: Optional[str] = None):
-        payload = {'ts': dt.datetime.utcnow().isoformat() + 'Z', 'readings': readings, 'error': error}
-        self.last_stream_payload = payload
-        self.last_error = error
+        with self._log_dump_lock:
+            log_dump_active = self._log_dump_file is not None
+            log_dump_path = self.log_dump_path
+            log_dump_sample_count = self._log_dump_sample_count
+            log_dump_max_samples = self._log_dump_max_samples
+        payload = {
+            'ts': _utcnow().isoformat() + 'Z',
+            'readings': readings,
+            'error': error,
+            'log_dump_active': log_dump_active,
+            'log_dump_path': log_dump_path,
+            'log_dump_sample_count': log_dump_sample_count,
+            'log_dump_max_samples': log_dump_max_samples,
+        }
+        # T2: atomic update of shared state
+        with self._state_lock:
+            self.last_stream_payload = payload
+            self.last_error = error
         try:
             self.stream_queue.put_nowait(payload)
         except queue.Full:
-            # drop oldest to make room
+            # BK4: log when data is dropped so operators know backpressure is occurring
             try:
                 _ = self.stream_queue.get_nowait()
                 self.stream_queue.put_nowait(payload)
+                log.warning('Stream queue was full; oldest payload dropped (session %s)', self.active_session_id)
             except queue.Empty:
                 pass
 
@@ -349,6 +484,18 @@ class PowerService:
         self.selected_port = port
 
     def status(self) -> Dict:
+        # T2: read shared state under lock to avoid torn reads
+        with self._state_lock:
+            last_payload = self.last_stream_payload
+            active_session = self.active_session_id
+            is_monitoring = bool(self.capture_thread and self.capture_thread.is_alive())
+            last_error = self.last_error
+        with self._log_dump_lock:
+            log_dump_active = self._log_dump_file is not None
+            log_dump_path = self.log_dump_path
+            log_dump_sample_count = self._log_dump_sample_count
+            log_dump_max_samples = self._log_dump_max_samples
+
         readings = []
         updated_at = None
         total_power_mw = 0.0
@@ -357,9 +504,9 @@ class PowerService:
             for rail in (self.active_config or {}).get('rails', [])
                 if rail.get('ignore_for_soc_total')
         }
-        if self.last_stream_payload:
-            readings = self.last_stream_payload.get('readings', [])
-            updated_at = self.last_stream_payload.get('ts')
+        if last_payload:
+            readings = last_payload.get('readings', [])
+            updated_at = last_payload.get('ts')
             total_power_mw = sum(
                 (item.get('actual_power_mw') or item.get('power_mw') or 0.0)
                 for item in readings
@@ -368,18 +515,24 @@ class PowerService:
 
         return {
             'selected_port': self.selected_port,
+            'persist_to_db': self.persist_to_db,
             'active_config': self.active_config['name'] if self.active_config else None,
             'active_config_id': self.active_config.get('config_id') if self.active_config else None,
-            'active_session_id': self.active_session_id,
-            'is_monitoring': bool(self.capture_thread and self.capture_thread.is_alive()),
+            'active_session_id': active_session,
+            'is_monitoring': is_monitoring,
             'samples_per_command': self.current_samples_per_command,
             'delay_ms': self.current_delay_ms,
             'command_interval': self.current_command_interval,
-            'last_error': self.last_error,
+            'last_error': last_error,
             'last_update_ts': updated_at,
             'rail_count': len(readings),
             'total_power_mw': total_power_mw,
             'latest_readings': readings,
+            'log_dump_active': log_dump_active,
+            'log_dump_path': log_dump_path,
+            'log_dump_sample_count': log_dump_sample_count,
+            'log_dump_max_samples': log_dump_max_samples,
+            'system_user': getpass.getuser(),
         }
 
     # ---------- streaming helpers ----------

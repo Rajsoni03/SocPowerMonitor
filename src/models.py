@@ -12,6 +12,11 @@ CONFIG_SNAPSHOT_KEY = 'config_snapshot'
 db = SQLAlchemy()
 
 
+def _utcnow():
+    """Return current time as naive UTC datetime (SQLite-compatible)."""
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+
+
 class Rail(db.Model):
     __tablename__ = 'rail'
     id = db.Column(db.Integer, primary_key=True)
@@ -29,7 +34,7 @@ class Rail(db.Model):
 class Session(db.Model):
     __tablename__ = 'session'
     id = db.Column(db.Integer, primary_key=True)
-    started_at = db.Column(db.DateTime, default=dt.datetime.utcnow, nullable=False)
+    started_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     ended_at = db.Column(db.DateTime, nullable=True)
     config_name = db.Column(db.String(128), nullable=False)
     config_hash = db.Column(db.String(64), nullable=False)
@@ -65,19 +70,22 @@ class Session(db.Model):
 class Sample(db.Model):
     __tablename__ = 'sample'
     id = db.Column(db.Integer, primary_key=True)
-    session_id = db.Column(db.Integer, db.ForeignKey('session.id'), nullable=False)
-    rail_id = db.Column(db.Integer, db.ForeignKey('rail.id'), nullable=False)
-    ts = db.Column(db.DateTime, default=dt.datetime.utcnow, nullable=False)
+    # D2: ondelete=CASCADE prevents orphaned samples when a session or rail is deleted
+    session_id = db.Column(db.Integer, db.ForeignKey('session.id', ondelete='CASCADE'), nullable=False)
+    rail_id = db.Column(db.Integer, db.ForeignKey('rail.id', ondelete='CASCADE'), nullable=False)
+    ts = db.Column(db.DateTime, default=_utcnow, nullable=False)
     voltage_v = db.Column(db.Float, nullable=True)
     current_ma = db.Column(db.Float, nullable=True)
     power_mw = db.Column(db.Float, nullable=True)
     raw_payload = db.Column(db.Text, nullable=True)
 
-    session = db.relationship('Session', backref=db.backref('samples', lazy='dynamic'))
-    rail = db.relationship('Rail', backref=db.backref('samples', lazy='dynamic'))
+    session = db.relationship('Session', backref=db.backref('samples', lazy='dynamic', passive_deletes=True))
+    rail = db.relationship('Rail', backref=db.backref('samples', lazy='dynamic', passive_deletes=True))
 
     __table_args__ = (
         Index('idx_sample_session_ts', 'session_id', 'ts'),
+        # D1: index on rail_id for per-rail queries (exports, sample filters)
+        Index('idx_sample_rail_session', 'rail_id', 'session_id'),
     )
 
     def to_dict(self):
