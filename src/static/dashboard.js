@@ -8,12 +8,20 @@
     eventSource: null,
     viewedSessionId: null,
     viewedConfigName: null,
+    persistToDb: false,
+    logDumpActive: false,
+    logDumpPath: null,
+    logDumpSampleCount: 0,
+    logDumpMaxSamples: null,
+    systemUser: null,
+    powerStateActive: false,
     formDirty: {
       port: false,
       config: false,
       sampleCount: false,
       delayMs: false,
       commandInterval: false,
+      dumpPath: false,
     },
   };
 
@@ -21,6 +29,10 @@
   const RAIL_COLORS = ['#38bdf8', '#22c55e', '#f59e0b', '#a78bfa', '#f472b6', '#fb7185', '#14b8a6', '#f97316'];
   let chartTooltip = null;
   let chartTooltipGuardsInstalled = false;
+
+  // UI3: SSE reconnect state
+  let sseRetryDelay = 1000;
+  let sseRetryTimer = null;
 
   const elements = {
     portSelect: document.getElementById('port-select'),
@@ -32,6 +44,7 @@
     commandInterval: document.getElementById('command-interval'),
     startMonitoring: document.getElementById('start-monitoring'),
     stopMonitoring: document.getElementById('stop-monitoring'),
+    dbCaptureToggle: document.getElementById('db-capture-toggle'),
     messageStrip: document.getElementById('message-strip'),
     statusPill: document.getElementById('monitor-status-pill'),
     statusDetail: document.getElementById('status-detail'),
@@ -43,6 +56,13 @@
     totalChart: document.getElementById('total-power-chart'),
     railChartGrid: document.getElementById('rail-chart-grid'),
     sessionsList: document.getElementById('sessions-list'),
+    dumpFilePath: document.getElementById('dump-file-path'),
+    dumpSampleCount: document.getElementById('dump-sample-count'),
+    dumpToggle: document.getElementById('dump-toggle'),
+    dumpStatusStrip: document.getElementById('dump-status-strip'),
+    dumpActivePath: document.getElementById('dump-active-path'),
+    dumpProgress: document.getElementById('dump-progress'),
+    powerStateToggle: document.getElementById('power-state-toggle'),
   };
 
   async function fetchJson(url, options) {
@@ -65,6 +85,94 @@
   function setMessage(message, isError = false) {
     elements.messageStrip.textContent = message;
     elements.messageStrip.classList.toggle('error', isError);
+  }
+
+  function updateDbCaptureButton() {
+    const btn = elements.dbCaptureToggle;
+    btn.textContent = state.persistToDb ? 'DB: On' : 'DB: Off';
+    btn.classList.toggle('db-capture-active', state.persistToDb);
+    btn.disabled = Boolean(state.status?.is_monitoring);
+  }
+
+  function powerStateFilename() {
+    return state.powerStateActive ? 'power_readings_active.txt' : 'power_readings_idle.txt';
+  }
+
+  function getDefaultDumpPath(configId) {
+    const user = state.systemUser || 'user';
+    const soc = configId || 'unknown';
+    return `/home/${user}/adas/power_automation/data/${soc}/${powerStateFilename()}`;
+  }
+
+  function updatePowerStateButton() {
+    const btn = elements.powerStateToggle;
+    btn.textContent = state.powerStateActive ? 'Power State: Active' : 'Power State: Idle';
+    btn.classList.toggle('power-state-active', state.powerStateActive);
+  }
+
+  function applyPowerStateToPath() {
+    const currentPath = elements.dumpFilePath.value.trim();
+    const filename = powerStateFilename();
+    const lastSlash = currentPath.lastIndexOf('/');
+    const dir = lastSlash >= 0 ? currentPath.slice(0, lastSlash + 1) : '';
+    elements.dumpFilePath.value = dir + filename;
+  }
+
+  function handlePowerStateToggle() {
+    state.powerStateActive = !state.powerStateActive;
+    updatePowerStateButton();
+    applyPowerStateToPath();
+  }
+
+  function updateDumpUI() {
+    const active = state.logDumpActive;
+    elements.dumpToggle.textContent = active ? 'Stop Dumping' : 'Start Dumping';
+    elements.dumpToggle.classList.toggle('danger-button', active);
+    elements.dumpToggle.classList.toggle('primary-button', !active);
+    elements.dumpStatusStrip.hidden = !active;
+    if (active) {
+      elements.dumpActivePath.textContent = state.logDumpPath || '';
+      if (state.logDumpMaxSamples) {
+        elements.dumpProgress.textContent = `${state.logDumpSampleCount} / ${state.logDumpMaxSamples}`;
+        elements.dumpProgress.hidden = false;
+      } else {
+        elements.dumpProgress.hidden = true;
+      }
+    }
+  }
+
+  async function handleDumpToggle() {
+    if (state.logDumpActive) {
+      await fetchJson('/api/log-dump', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'stop' }),
+      });
+      state.logDumpActive = false;
+      state.logDumpPath = null;
+      updateDumpUI();
+      setMessage('Log dump stopped.');
+    } else {
+      const filePath = elements.dumpFilePath.value.trim();
+      if (!filePath) {
+        setMessage('Enter a file path before starting dump.', true);
+        return;
+      }
+      const maxSamples = Math.max(1, Math.floor(Number(elements.dumpSampleCount.value) || 10));
+      const result = await fetchJson('/api/log-dump', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start', file_path: filePath, max_samples: maxSamples }),
+      });
+      state.logDumpActive = true;
+      state.logDumpPath = result.log_dump_path;
+      state.logDumpSampleCount = 0;
+      state.logDumpMaxSamples = maxSamples;
+      elements.dumpFilePath.value = result.log_dump_path;
+      markDirty('dumpPath');
+      updateDumpUI();
+      setMessage(`Dumping to: ${result.log_dump_path}`);
+    }
   }
 
   function formatNumber(value, digits = 1) {
@@ -198,16 +306,17 @@
     return { ts, rails, totalPower };
   }
 
+  // UI5: replaced sort-on-every-push with ordered insertion + shift trim
   function mergePoint(point) {
-    const existing = state.history.find((item) => item.ts === point.ts);
-    if (existing) {
-      existing.rails = point.rails;
-      existing.totalPower = point.totalPower;
+    const idx = state.history.findIndex((item) => item.ts === point.ts);
+    if (idx !== -1) {
+      state.history[idx].rails = point.rails;
+      state.history[idx].totalPower = point.totalPower;
     } else {
       state.history.push(point);
-      state.history.sort((left, right) => new Date(left.ts) - new Date(right.ts));
+      // SSE events arrive in chronological order so no sort needed
       if (state.history.length > MAX_HISTORY_POINTS) {
-        state.history.splice(0, state.history.length - MAX_HISTORY_POINTS);
+        state.history.shift();
       }
     }
   }
@@ -285,16 +394,25 @@
     `;
     tooltip.hidden = false;
 
-    const offset = 14;
+    // Force layout so getBoundingClientRect reflects actual size
+    tooltip.style.left = '-9999px';
+    tooltip.style.top = '-9999px';
     const rect = tooltip.getBoundingClientRect();
+
+    const offset = 14;
     let left = event.clientX + offset;
     let top = event.clientY - rect.height - offset;
 
+    // UI6: clamp horizontally
     if (left + rect.width > window.innerWidth - 8) {
       left = event.clientX - rect.width - offset;
     }
+    // UI6: clamp vertically (top and bottom)
     if (top < 8) {
       top = event.clientY + offset;
+    }
+    if (top + rect.height > window.innerHeight - 8) {
+      top = window.innerHeight - rect.height - 8;
     }
 
     tooltip.style.left = `${left}px`;
@@ -342,6 +460,14 @@
     syncControlValue(elements.sampleCount, state.status.samples_per_command, 'sampleCount');
     syncControlValue(elements.delayMs, state.status.delay_ms, 'delayMs');
     syncControlValue(elements.commandInterval, state.status.command_interval, 'commandInterval');
+    state.persistToDb = state.status.persist_to_db ?? false;
+    state.logDumpActive = state.status.log_dump_active ?? false;
+    state.logDumpPath = state.status.log_dump_path ?? null;
+    state.logDumpSampleCount = state.status.log_dump_sample_count ?? 0;
+    state.logDumpMaxSamples = state.status.log_dump_max_samples ?? null;
+    state.systemUser = state.status.system_user ?? null;
+    updateDbCaptureButton();
+    updateDumpUI();
     if (state.status.latest_readings?.length && state.status.last_update_ts) {
       mergePoint(computePoint(state.status.last_update_ts, state.status.latest_readings));
     }
@@ -433,23 +559,59 @@
     elements.stopMonitoring.disabled = !monitoring;
   }
 
+  // S1: replaced innerHTML with DOM API to prevent XSS via config_name or other server data
   function renderSessions() {
     elements.sessionsList.innerHTML = '';
     if (!state.sessions.length) {
-      elements.sessionsList.innerHTML = '<p>No sessions recorded yet.</p>';
+      const p = document.createElement('p');
+      p.textContent = 'No sessions recorded yet.';
+      elements.sessionsList.appendChild(p);
       return;
     }
 
     state.sessions.slice(0, 8).forEach((session) => {
       const item = document.createElement('article');
       item.className = 'session-item';
-      const activeLabel = state.status?.active_session_id === session.id ? 'Active session' : 'View history';
-      item.innerHTML = `
-        <h3>Session #${session.id}</h3>
-        <p>${session.config_name}</p>
-        <p>${formatSessionTime(session.started_at)} to ${formatSessionTime(session.ended_at)}</p>
-        <p><a href="/api/export.csv?session_id=${session.id}">Export CSV</a> • <a href="#" data-session-id="${session.id}">${activeLabel}</a></p>
-      `;
+
+      const h3 = document.createElement('h3');
+      h3.textContent = `Session #${session.id}`;
+      item.appendChild(h3);
+
+      const pConfig = document.createElement('p');
+      pConfig.textContent = session.config_name;
+      item.appendChild(pConfig);
+
+      const pTime = document.createElement('p');
+      pTime.textContent = `${formatSessionTime(session.started_at)} to ${formatSessionTime(session.ended_at)}`;
+      item.appendChild(pTime);
+
+      const pLinks = document.createElement('p');
+
+      const exportA = document.createElement('a');
+      exportA.href = `/api/export.csv?session_id=${session.id}`;
+      exportA.textContent = 'Export CSV';
+      pLinks.appendChild(exportA);
+
+      pLinks.appendChild(document.createTextNode(' • '));
+
+      const isActive = state.status?.active_session_id === session.id;
+      const historyA = document.createElement('a');
+      historyA.href = '#';
+      historyA.dataset.sessionId = String(session.id);
+      historyA.textContent = isActive ? 'Active session' : 'View history';
+      pLinks.appendChild(historyA);
+
+      if (!isActive) {
+        pLinks.appendChild(document.createTextNode(' • '));
+        const deleteA = document.createElement('a');
+        deleteA.href = '#';
+        deleteA.className = 'session-delete-link';
+        deleteA.dataset.deleteSessionId = String(session.id);
+        deleteA.textContent = 'Delete';
+        pLinks.appendChild(deleteA);
+      }
+
+      item.appendChild(pLinks);
       elements.sessionsList.appendChild(item);
     });
 
@@ -462,6 +624,35 @@
         setMessage(`Loaded history for session #${sessionId}.`);
       });
     });
+
+    elements.sessionsList.querySelectorAll('[data-delete-session-id]').forEach((link) => {
+      link.addEventListener('click', async (event) => {
+        event.preventDefault();
+        const sessionId = event.currentTarget.getAttribute('data-delete-session-id');
+        if (!confirm(`Delete session #${sessionId} and all its measurements? This cannot be undone.`)) {
+          return;
+        }
+        try {
+          await fetchJson(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+          state.sessions = state.sessions.filter((s) => s.id !== Number(sessionId));
+          if (state.viewedSessionId === Number(sessionId)) {
+            state.viewedSessionId = null;
+            state.history = [];
+          }
+          render();
+          setMessage(`Session #${sessionId} deleted.`);
+        } catch (error) {
+          setMessage(error.message, true);
+        }
+      });
+    });
+  }
+
+  // UI2: compute decimal places based on the value range so sub-mW readings show correctly
+  function yAxisDecimals(range) {
+    if (range < 1) return 2;
+    if (range < 10) return 1;
+    return 0;
   }
 
   function drawLineChart(canvas, values, labels, lineColor, fillColor, unitLabel, options = {}) {
@@ -513,6 +704,7 @@
     const range = Math.max(maxValue - minValue, minRange);
     const xStep = values.length > 1 ? plotWidth / (values.length - 1) : 0;
     const yValueStep = range / yTickCount;
+    const decimals = yAxisDecimals(range); // UI2
 
     const points = values.map((value, index) => ({
       x: leftPad + xStep * index,
@@ -521,7 +713,12 @@
       label: labels[index] || '',
     }));
     const hoverPoints = points.filter((point) => Number.isFinite(point.y));
-    const renderChart = () => {
+
+    // UI1: renderStatic draws everything except the hover indicator
+    // staticSnapshot stores pixel data so mousemove can restore without full repaint
+    let staticSnapshot = null;
+
+    const renderStatic = () => {
       context.setTransform(1, 0, 0, 1, 0, 0);
       context.clearRect(0, 0, canvas.width, canvas.height);
       context.font = '11px "IBM Plex Sans", sans-serif';
@@ -541,7 +738,8 @@
       for (let i = 0; i <= yTickCount; i += 1) {
         const tickValue = minValue + (yValueStep * (yTickCount - i));
         const y = topPad + (plotHeight / yTickCount) * i;
-        context.fillText(`${tickValue.toFixed(0)} ${unitLabel}`, leftPad - 6, y + 4);
+        // UI2: use dynamic decimal precision
+        context.fillText(`${tickValue.toFixed(decimals)} ${unitLabel}`, leftPad - 6, y + 4);
       }
 
       if (showXAxisLabels) {
@@ -590,33 +788,42 @@
         context.fill();
       }
 
-      if (activePoint) {
-        context.strokeStyle = 'rgba(226, 232, 240, 0.28)';
-        context.lineWidth = 1;
-        context.beginPath();
-        context.moveTo(activePoint.x, topPad);
-        context.lineTo(activePoint.x, height - bottomPad);
-        context.stroke();
-
-        context.fillStyle = lineColor;
-        context.beginPath();
-        context.arc(activePoint.x, activePoint.y, 4.5, 0, Math.PI * 2);
-        context.fill();
-
-        context.strokeStyle = 'rgba(241, 245, 249, 0.95)';
-        context.lineWidth = 2;
-        context.beginPath();
-        context.arc(activePoint.x, activePoint.y, 7, 0, Math.PI * 2);
-        context.stroke();
-      }
-
       context.fillStyle = 'rgba(203, 213, 225, 0.9)';
       context.textAlign = 'right';
-      context.fillText(`${rawMaxValue.toFixed(1)} ${unitLabel}`, width - rightPad, 18);
+      context.fillText(`${rawMaxValue.toFixed(decimals)} ${unitLabel}`, width - rightPad, 18);
       context.textAlign = 'left';
+
+      // UI1: capture static pixels so hover repaint only draws the indicator layer
+      staticSnapshot = context.getImageData(0, 0, canvas.width, canvas.height);
     };
 
-    renderChart();
+    // UI1: renderHover restores static snapshot then draws only the hover indicator
+    const renderHover = () => {
+      if (!activePoint) return;
+      if (staticSnapshot) {
+        context.putImageData(staticSnapshot, 0, 0);
+      }
+
+      context.strokeStyle = 'rgba(226, 232, 240, 0.28)';
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(activePoint.x, topPad);
+      context.lineTo(activePoint.x, height - bottomPad);
+      context.stroke();
+
+      context.fillStyle = lineColor;
+      context.beginPath();
+      context.arc(activePoint.x, activePoint.y, 4.5, 0, Math.PI * 2);
+      context.fill();
+
+      context.strokeStyle = 'rgba(241, 245, 249, 0.95)';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.arc(activePoint.x, activePoint.y, 7, 0, Math.PI * 2);
+      context.stroke();
+    };
+
+    renderStatic();
 
     canvas.onmousemove = (event) => {
       if (!hoverPoints.length) {
@@ -636,13 +843,16 @@
         }
       });
 
+      // UI1: only repaint hover layer, not the full chart
       activePoint = nearest;
-      renderChart();
+      renderHover();
       showChartTooltip(event, nearest, unitLabel);
     };
     canvas.onmouseleave = () => {
       activePoint = null;
-      renderChart();
+      if (staticSnapshot) {
+        context.putImageData(staticSnapshot, 0, 0);
+      }
       hideChartTooltip();
     };
   }
@@ -720,7 +930,7 @@
 
     elements.railChartGrid.appendChild(fragment);
     window.requestAnimationFrame(() => {
-      chartDefs.forEach(({ canvas, values, labels, color, railName }) => {
+      chartDefs.forEach(({ canvas, values, labels, color }) => {
         drawLineChart(canvas, values, labels, color, `${color}22`, 'mW', { showXAxisLabels: false });
       });
     });
@@ -756,6 +966,20 @@
   }
 
   function applyStreamPayload(payload) {
+    if (payload && 'log_dump_active' in payload) {
+      if (state.logDumpActive && !payload.log_dump_active) {
+        state.logDumpActive = false;
+        state.logDumpPath = null;
+        state.logDumpSampleCount = payload.log_dump_sample_count ?? state.logDumpSampleCount;
+        state.logDumpMaxSamples = payload.log_dump_max_samples ?? state.logDumpMaxSamples;
+        updateDumpUI();
+        setMessage('Log dump completed — sample limit reached.');
+      } else if (state.logDumpActive) {
+        state.logDumpSampleCount = payload.log_dump_sample_count ?? state.logDumpSampleCount;
+        updateDumpUI();
+      }
+    }
+
     if (!payload || !Array.isArray(payload.readings) || payload.readings.length === 0) {
       if (payload?.error) {
         setMessage(payload.error, true);
@@ -772,20 +996,47 @@
     render();
   }
 
+  // UI3: SSE wrapper with exponential backoff reconnect
   function ensureStream() {
     if (state.eventSource) {
       state.eventSource.close();
+      state.eventSource = null;
+    }
+    if (sseRetryTimer) {
+      clearTimeout(sseRetryTimer);
+      sseRetryTimer = null;
     }
 
-    state.eventSource = new EventSource('/api/stream');
-    state.eventSource.onmessage = (event) => {
+    const es = new EventSource('/api/stream');
+    state.eventSource = es;
+
+    es.onopen = () => {
+      sseRetryDelay = 1000; // reset backoff on successful connect
+    };
+
+    es.onmessage = (event) => {
       const payload = JSON.parse(event.data);
       applyStreamPayload(payload);
     };
-    state.eventSource.onerror = () => {
-      setMessage('Live stream disconnected. Click Sync to refresh dashboard state.', true);
+
+    es.onerror = () => {
+      es.close();
+      if (state.eventSource === es) {
+        state.eventSource = null;
+      }
+      setMessage(`Live stream disconnected. Reconnecting in ${Math.round(sseRetryDelay / 1000)}s…`, true);
+      sseRetryTimer = setTimeout(() => {
+        sseRetryDelay = Math.min(sseRetryDelay * 2, 30000); // cap at 30s
+        ensureStream();
+      }, sseRetryDelay);
     };
   }
+
+  // UI4: close EventSource on page unload to release the HTTP connection
+  window.addEventListener('beforeunload', () => {
+    if (sseRetryTimer) clearTimeout(sseRetryTimer);
+    state.eventSource?.close();
+  });
 
   async function handlePortRefresh() {
     await loadPorts();
@@ -868,12 +1119,30 @@
     setMessage('Monitoring stopped.');
   }
 
+  async function handleDbCaptureToggle() {
+    const newValue = !state.persistToDb;
+    await fetchJson('/api/db-capture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: newValue }),
+    });
+    state.persistToDb = newValue;
+    updateDbCaptureButton();
+    setMessage(`DB capture ${newValue ? 'enabled — measurements will be saved to the database' : 'disabled — live stream only'}.`);
+  }
+
   async function initialize() {
     try {
       installChartTooltipGuards();
       await loadStatus();
       state.viewedSessionId = state.status?.active_session_id || null;
       state.viewedConfigName = state.status?.active_config || null;
+      updatePowerStateButton();
+      if (!state.formDirty.dumpPath && !state.logDumpActive) {
+        elements.dumpFilePath.value = getDefaultDumpPath(state.status?.active_config_id);
+      } else if (state.logDumpActive && state.logDumpPath) {
+        elements.dumpFilePath.value = state.logDumpPath;
+      }
       await Promise.all([loadPorts(), loadConfigs(), loadSessions()]);
       if (state.status?.active_session_id) {
         await loadHistoryForSession(state.status.active_session_id);
@@ -900,6 +1169,9 @@
 
   elements.configSelect.addEventListener('change', () => {
     markDirty('config');
+    if (!state.formDirty.dumpPath) {
+      elements.dumpFilePath.value = getDefaultDumpPath(elements.configSelect.value);
+    }
   });
 
   elements.sampleCount.addEventListener('input', () => {
@@ -920,6 +1192,22 @@
 
   elements.stopMonitoring.addEventListener('click', () => {
     handleStopMonitoring().catch((error) => setMessage(error.message, true));
+  });
+
+  elements.dbCaptureToggle.addEventListener('click', () => {
+    handleDbCaptureToggle().catch((error) => setMessage(error.message, true));
+  });
+
+  elements.dumpFilePath.addEventListener('input', () => {
+    markDirty('dumpPath');
+  });
+
+  elements.dumpToggle.addEventListener('click', () => {
+    handleDumpToggle().catch((error) => setMessage(error.message, true));
+  });
+
+  elements.powerStateToggle.addEventListener('click', () => {
+    handlePowerStateToggle();
   });
 
   window.addEventListener('resize', renderCharts);

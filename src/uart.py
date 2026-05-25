@@ -50,7 +50,12 @@ class Uart:
             print(f'[ Info ] Log level is set to {_log_level_dict[self.log_level]}.')
         
     def connect(self):
-        self.serial_conn_obj = serial.Serial(self.uart_port_info['port'])
+        try:
+            self.serial_conn_obj = serial.Serial(self.uart_port_info['port'])
+        except serial.SerialException as exc:
+            raise UartSetupIssue(
+                f"Failed to open serial port '{self.uart_port_info['port']}': {exc}"
+            ) from exc
         ser_settings = self.serial_conn_obj.getSettingsDict()
         ser_settings.update(self.uart_port_info)
         self.serial_conn_obj.applySettingsDict(ser_settings)

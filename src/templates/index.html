@@ -62,6 +62,35 @@
           <div class="action-row">
             <button type="button" class="primary-button" id="start-monitoring">Start monitoring</button>
             <button type="button" class="danger-button" id="stop-monitoring">Stop</button>
+            <button type="button" class="secondary-button" id="db-capture-toggle" title="Toggle whether measurements are saved to the database">DB: Off</button>
+          </div>
+
+          <div class="controls-divider"></div>
+
+          <div class="panel-heading">
+            <p class="panel-kicker">Log Dump</p>
+            <h2>Raw UART capture</h2>
+          </div>
+
+          <div class="controls-grid">
+            <label class="field">
+              <span>Dump file path</span>
+              <input id="dump-file-path" type="text" placeholder="/home/user/power_readings.txt">
+            </label>
+            <label class="field">
+              <span>Samples to dump</span>
+              <input id="dump-sample-count" type="number" min="1" step="1" value="10">
+            </label>
+          </div>
+
+          <div class="action-row">
+            <button type="button" class="secondary-button" id="power-state-toggle">Power State: Idle</button>
+            <button type="button" class="primary-button" id="dump-toggle">Start Dumping</button>
+          </div>
+
+          <div class="dump-status-strip" id="dump-status-strip" hidden>
+            Dumping to: <span id="dump-active-path"></span>
+            <span class="dump-progress-count" id="dump-progress"></span>
           </div>
 
           <div class="message-strip" id="message-strip">Loading dashboard state...</div>
