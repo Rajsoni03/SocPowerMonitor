@@ -9,9 +9,9 @@ from typing import Optional
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 from sqlalchemy.orm import joinedload
 
-from .config_loader import ConfigLoader
-from .models import Sample, Session, db, init_db
-from .power_service import PowerService, list_uart_ports
+from src.config_loader import ConfigLoader
+from src.models import Sample, Session, db, init_db
+from src.power_service import PowerService, list_uart_ports
 
 log = logging.getLogger(__name__)
 
@@ -297,4 +297,4 @@ def create_app(test_config: Optional[dict] = None):
 
 if __name__ == '__main__':
     app = create_app()
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8000)), debug=True)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8050)), debug=True)
