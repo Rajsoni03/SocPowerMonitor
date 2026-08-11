@@ -58,7 +58,7 @@ The project is aimed at board bring-up, lab validation, workload comparison, and
 - Run the Application
 
   ```bash
-  python3 -m src.app
+  python3 app.py
   ```
 
 The server runs on `http://localhost:8000/`.

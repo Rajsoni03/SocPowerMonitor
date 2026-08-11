@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
-
 class ConfigLoader:
     def __init__(self, config_dir: str):
         self.config_dir = Path(config_dir)

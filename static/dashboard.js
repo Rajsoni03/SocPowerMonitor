@@ -101,7 +101,7 @@
   function getDefaultDumpPath(configId) {
     const user = state.systemUser || 'user';
     const soc = configId || 'unknown';
-    return `/home/${user}/adas/power_automation/data/${soc}/${powerStateFilename()}`;
+    return `/home/${user}/nvme/adas/PowerOptimizationWorkarea/automation/data/${soc}/${powerStateFilename()}`;
   }
 
   function updatePowerStateButton() {
